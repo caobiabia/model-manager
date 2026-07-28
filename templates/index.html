@@ -1,0 +1,877 @@
+<!DOCTYPE html>
+<html lang="zh" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CSP Model Manager</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lucide@latest"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{height:100%;overflow:hidden}
+
+/* ── Design Tokens ── */
+:root{
+  --font:'Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --font-mono:"JetBrains Mono","SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+  --radius-xs:4px;--radius-sm:6px;--radius:8px;--radius-lg:12px;--radius-xl:16px;
+  --ease:cubic-bezier(.4,0,.2,1);--ease-out:cubic-bezier(0,0,.2,1);
+  --t-fast:120ms;--t:200ms;--t-slow:350ms;
+}
+[data-theme="dark"]{
+  --bg:hsl(222,20%,7%);
+  --panel:hsl(222,18%,10.5%);
+  --panel-2:hsl(222,16%,13%);
+  --panel-hover:hsl(222,14%,15.5%);
+  --border:hsl(220,14%,18%);
+  --border-strong:hsl(220,12%,25%);
+  --text:hsl(220,16%,90%);
+  --text-dim:hsl(220,10%,58%);
+  --text-mute:hsl(220,8%,44%);
+  --accent:hsl(217,88%,60%);
+  --accent-strong:hsl(217,90%,66%);
+  --accent-soft:hsla(217,80%,60%,.14);
+  --accent-ring:hsla(217,88%,60%,.35);
+  --green:hsl(152,54%,52%);
+  --green-soft:hsla(152,54%,52%,.12);
+  --red:hsl(0,72%,62%);
+  --red-soft:hsla(0,72%,62%,.12);
+  --amber:hsl(38,82%,54%);
+  --amber-soft:hsla(38,82%,54%,.12);
+  --bubble-user:hsl(217,76%,52%);
+  --bubble-user-2:hsl(217,80%,46%);
+  --bubble-assistant:hsl(222,16%,14%);
+  --code-bg:hsl(222,22%,9%);
+  --code-border:hsl(220,13%,21%);
+  --overlay:hsla(222,28%,4%,.6);
+  --input-bg:hsl(222,20%,8.5%);
+  --shadow-sm:0 1px 2px hsla(0,0%,0%,.4);
+  --shadow-md:0 6px 18px hsla(0,0%,0%,.4);
+  --shadow-lg:0 24px 64px hsla(0,0%,0%,.55);
+}
+[data-theme="light"]{
+  --bg:hsl(220,16%,96%);
+  --panel:hsl(0,0%,100%);
+  --panel-2:hsl(220,16%,97%);
+  --panel-hover:hsl(220,14%,93%);
+  --border:hsl(220,14%,88%);
+  --border-strong:hsl(220,12%,80%);
+  --text:hsl(222,16%,16%);
+  --text-dim:hsl(220,8%,46%);
+  --text-mute:hsl(220,8%,60%);
+  --accent:hsl(217,82%,50%);
+  --accent-strong:hsl(217,86%,46%);
+  --accent-soft:hsla(217,82%,50%,.1);
+  --accent-ring:hsla(217,82%,50%,.28);
+  --green:hsl(152,52%,38%);
+  --green-soft:hsla(152,52%,38%,.12);
+  --red:hsl(0,70%,48%);
+  --red-soft:hsla(0,70%,48%,.1);
+  --amber:hsl(38,80%,42%);
+  --amber-soft:hsla(38,80%,42%,.12);
+  --bubble-user:hsl(217,76%,50%);
+  --bubble-user-2:hsl(217,80%,44%);
+  --bubble-assistant:hsl(220,14%,94%);
+  --code-bg:hsl(220,16%,94%);
+  --code-border:hsl(220,12%,86%);
+  --overlay:hsla(220,20%,10%,.32);
+  --input-bg:hsl(0,0%,100%);
+  --shadow-sm:0 1px 2px hsla(220,20%,10%,.08);
+  --shadow-md:0 6px 18px hsla(220,20%,10%,.12);
+  --shadow-lg:0 24px 64px hsla(220,20%,10%,.2);
+}
+
+body{
+  font-family:var(--font);font-size:13px;line-height:1.5;
+  background:var(--bg);color:var(--text);
+  height:100%;display:flex;overflow:hidden;
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
+}
+
+/* scrollbar */
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border-strong);border-radius:8px;border:2px solid transparent;background-clip:padding-box}
+::-webkit-scrollbar-thumb:hover{background:var(--text-mute)}
+*{scrollbar-width:thin;scrollbar-color:var(--border-strong) transparent}
+
+svg.lucide{flex-shrink:0;stroke-width:2}
+
+/* ── Buttons ── */
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  padding:6px 12px;border:1px solid var(--border);
+  border-radius:var(--radius);background:var(--panel-2);
+  font-size:12px;font-weight:500;cursor:pointer;color:var(--text);
+  white-space:nowrap;line-height:1;font-family:var(--font);
+  transition:background var(--t-fast),border-color var(--t-fast),box-shadow var(--t-fast),transform var(--t-fast),filter var(--t-fast);
+}
+.btn svg.lucide{width:14px;height:14px}
+.btn:hover{background:var(--panel-hover);border-color:var(--border-strong)}
+.btn:active{transform:translateY(.5px)}
+.btn:focus-visible{outline:none;box-shadow:0 0 0 3px var(--accent-ring)}
+.btn.primary{background:linear-gradient(180deg,var(--accent-strong),var(--accent));color:#fff;border-color:transparent;font-weight:600;box-shadow:0 1px 2px hsla(217,80%,30%,.4)}
+.btn.primary:hover{filter:brightness(1.08);box-shadow:0 4px 12px hsla(217,80%,40%,.35)}
+.btn.primary:active{filter:brightness(.96)}
+.btn.danger{color:var(--red);border-color:var(--red-soft)}
+.btn.danger:hover{background:var(--red-soft);border-color:var(--red)}
+.btn.ghost{border-color:transparent;background:transparent;color:var(--text-dim)}
+.btn.ghost:hover{background:var(--panel-hover);color:var(--text)}
+.btn:disabled{opacity:.45;cursor:not-allowed;pointer-events:none}
+.btn-xs{padding:4px 9px;font-size:11px;border-radius:var(--radius-sm);gap:5px}
+.btn-xs svg.lucide{width:13px;height:13px}
+
+/* ── Sidebar ── */
+.sidebar{
+  width:390px;min-width:390px;background:var(--panel);
+  border-right:1px solid var(--border);display:flex;flex-direction:column;
+}
+.sidebar-header{
+  padding:12px 14px;border-bottom:1px solid var(--border);
+  font-size:14px;font-weight:600;display:flex;align-items:center;gap:8px;
+  background:var(--panel-2);
+}
+.sidebar-header .logo-dot{
+  width:10px;height:10px;border-radius:50%;background:var(--accent);
+  box-shadow:0 0 8px var(--accent);flex-shrink:0;
+}
+.sidebar-header .brand{font-weight:600;letter-spacing:-.01em}
+
+/* GPU bar */
+.gpu-bar{
+  padding:9px 12px;border-bottom:1px solid var(--border);
+  display:flex;gap:6px;overflow-x:auto;flex-wrap:wrap;align-items:center;
+}
+.gpu-chip{
+  display:inline-flex;align-items:center;gap:7px;
+  padding:4px 8px;border-radius:var(--radius-sm);
+  font-variant-numeric:tabular-nums;font-size:10.5px;font-weight:500;
+  background:var(--panel-2);color:var(--text-dim);
+  border:1px solid var(--border);white-space:nowrap;line-height:1;
+}
+.gpu-chip-label{color:var(--text);font-weight:600}
+.gpu-chip-track{width:36px;height:4px;border-radius:3px;background:var(--border-strong);overflow:hidden;flex-shrink:0}
+.gpu-chip-fill{display:block;height:100%;width:0;border-radius:3px;background:linear-gradient(90deg,hsl(152,54%,46%),var(--green));transition:width .5s var(--ease)}
+.gpu-chip-val{color:var(--green);font-weight:600}
+.gpu-chip.busy{border-color:var(--amber-soft)}
+.gpu-chip.busy .gpu-chip-fill{background:linear-gradient(90deg,var(--amber),var(--red))}
+.gpu-chip.busy .gpu-chip-val{color:var(--amber)}
+
+/* Model list */
+.model-list{flex:1;overflow-y:auto;padding:6px 8px}
+.model-row{
+  display:flex;align-items:center;gap:10px;padding:9px 10px;
+  border-radius:var(--radius);cursor:pointer;border:1px solid transparent;
+  font-size:13px;margin-bottom:3px;border-left:3px solid transparent;
+  transition:background var(--t-fast),border-color var(--t-fast);
+}
+.model-row:hover{background:var(--panel-hover)}
+.model-row.active{border-color:var(--border);background:var(--panel-hover);border-left-color:var(--accent)}
+.model-row.status-on{border-left-color:var(--green)}
+.model-row.status-off{border-left-color:var(--border-strong)}
+.model-row.status-loading{border-left-color:var(--amber)}
+.model-row.active.status-on{border-left-color:var(--green);background:var(--green-soft)}
+.model-row.active.status-off{border-left-color:var(--text-dim)}
+.model-row.active.status-loading{border-left-color:var(--amber);background:var(--amber-soft)}
+
+.model-row .status{
+  width:9px;height:9px;border-radius:50%;flex-shrink:0;
+  box-shadow:0 0 0 2px var(--panel);
+}
+.model-row .status.off{background:var(--text-mute)}
+.model-row .status.on{background:var(--green);box-shadow:0 0 0 2px var(--panel),0 0 8px hsla(152,54%,52%,.6);animation:pulse-on 2.4s var(--ease) infinite}
+.model-row .status.loading{background:var(--amber);animation:pulse-amber 1s var(--ease) infinite;box-shadow:0 0 0 2px var(--panel),0 0 8px hsla(38,82%,54%,.6)}
+@keyframes pulse-on{0%,100%{box-shadow:0 0 0 2px var(--panel),0 0 5px hsla(152,54%,52%,.4)}50%{box-shadow:0 0 0 2px var(--panel),0 0 11px hsla(152,54%,52%,.85)}}
+@keyframes pulse-amber{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.45;transform:scale(.8)}}
+
+.side-log-btn{display:inline-flex;align-items:center;gap:3px;font-size:11px;color:var(--accent);cursor:pointer;transition:opacity var(--t-fast),background var(--t-fast);padding:2px 4px;border-radius:var(--radius-xs)}
+.side-log-btn:hover{opacity:.85;background:var(--accent-soft)}
+.side-log-btn svg.lucide{width:12px;height:12px}
+.model-row .info{flex:1;min-width:0}
+.model-row .name{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px}
+.model-row .detail{font-size:11px;color:var(--text-dim);margin-top:2px;font-variant-numeric:tabular-nums}
+.model-row .actions{display:flex;gap:5px;align-items:center;flex-shrink:0}
+.model-row .provider-tag{display:inline-flex;align-items:center;gap:3px;font-size:10.5px;color:var(--text-mute);font-weight:600;padding:2px 6px;border-radius:var(--radius-xs);border:1px solid var(--border)}
+.model-row .provider-tag svg.lucide{width:11px;height:11px}
+
+/* Side log panel */
+.side-log{display:none;margin:6px;max-height:280px;overflow-y:auto;background:var(--code-bg);
+  color:var(--text-dim);font-size:11px;font-family:var(--font-mono);padding:9px 11px;
+  border-radius:var(--radius-sm);white-space:pre-wrap;word-break:break-word;border:1px solid var(--code-border);line-height:1.6}
+
+/* ── Main Chat ── */
+.main{flex:1;display:flex;flex-direction:column;min-width:0;background:var(--bg)}
+.chat-header{
+  padding:11px 18px;border-bottom:1px solid var(--border);
+  background:var(--panel);font-size:14px;font-weight:600;
+  display:flex;align-items:center;gap:9px;
+}
+.chat-header .chat-title-icon{width:16px;height:16px;color:var(--accent)}
+.chat-header .chat-title{font-weight:600}
+.chat-header .chat-sep{width:14px;height:14px;color:var(--text-mute)}
+.chat-header select{
+  font-size:13px;padding:6px 30px 6px 11px;border:1px solid var(--border);
+  border-radius:var(--radius);background:var(--input-bg);color:var(--text);
+  max-width:280px;cursor:pointer;font-family:var(--font);font-weight:500;
+  appearance:none;-webkit-appearance:none;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23808080' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 9px center;
+  transition:border-color var(--t-fast),box-shadow var(--t-fast);
+}
+.chat-header select:hover{border-color:var(--border-strong)}
+.chat-header select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-ring)}
+.chat-header .status-badge{padding:3px 9px;border-radius:11px;font-size:11px;font-weight:600;display:inline-flex;align-items:center;gap:5px;line-height:1}
+.chat-header .status-badge::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.chat-header .status-badge.ready{background:var(--green-soft);color:var(--green)}
+.chat-header .status-badge.off{background:var(--red-soft);color:var(--red)}
+.chat-header .status-badge:empty{display:none}
+.chat-header .new-chat-btn{margin-left:auto;gap:5px;white-space:nowrap}
+.chat-header .new-chat-btn:disabled{opacity:.4;cursor:not-allowed}
+
+.chat-messages{flex:1;overflow-y:auto;padding:20px 22px}
+.msg{width:fit-content;max-width:78%;margin-bottom:18px;font-size:13.5px;line-height:1.65;animation:msgIn .32s var(--ease-out)}
+.msg.user{margin-left:auto}
+.msg.assistant{margin-right:auto}
+@keyframes msgIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.msg .bubble{padding:11px 15px;border-radius:var(--radius-lg);word-break:break-word;overflow-wrap:anywhere}
+.msg.user .bubble{
+  background:linear-gradient(180deg,var(--bubble-user),var(--bubble-user-2));color:#fff;
+  border-bottom-right-radius:var(--radius-sm);box-shadow:var(--shadow-sm);
+}
+.msg.assistant .bubble{
+  background:var(--bubble-assistant);color:var(--text);
+  border:1px solid var(--border);border-bottom-left-radius:var(--radius-sm);box-shadow:var(--shadow-sm);
+}
+.msg .bubble h1,.msg .bubble h2,.msg .bubble h3,.msg .bubble h4{margin:10px 0 6px;line-height:1.35;font-weight:600}
+.msg .bubble h1{font-size:18px}.msg .bubble h2{font-size:16px}.msg .bubble h3{font-size:14.5px}.msg .bubble h4{font-size:13.5px}
+.msg .bubble ul,.msg .bubble ol{margin:6px 0;padding-left:22px}
+.msg .bubble li{margin:3px 0}
+.msg .bubble hr{border:none;border-top:1px solid var(--border);margin:10px 0}
+.msg .bubble blockquote{border-left:3px solid var(--accent);padding:2px 0 2px 10px;color:var(--text-dim);margin:6px 0;font-style:italic}
+.msg .bubble .code-block{
+  display:block;background:var(--code-bg);border:1px solid var(--code-border);
+  border-radius:var(--radius-sm);padding:10px 12px;margin:8px 0;
+  font-family:var(--font-mono);font-size:12.5px;line-height:1.55;
+  overflow-x:auto;white-space:pre;color:hsl(220,10%,78%);
+}
+.msg.user .bubble .code-block{background:hsla(217,70%,16%,.6);border-color:hsla(217,60%,40%,.5);color:hsl(217,20%,92%)}
+.msg .bubble .inline-code{
+  font-family:var(--font-mono);font-size:12px;
+  background:var(--code-bg);padding:1.5px 5px;border-radius:4px;border:1px solid var(--code-border);
+}
+.msg.user .bubble .inline-code{background:hsla(217,70%,20%,.5);border-color:hsla(217,60%,42%,.5);color:hsl(217,15%,94%)}
+.msg .bubble table{border-collapse:collapse;width:100%;margin:8px 0;font-size:13px;border-radius:var(--radius-sm);overflow:hidden}
+.msg .bubble th,.msg .bubble td{border:1px solid var(--border);padding:6px 10px;text-align:left}
+.msg .bubble th{background:var(--panel-hover);font-weight:600}
+.msg .bubble tr:nth-child(even) td{background:var(--panel-hover)}
+.msg.user .bubble th{background:hsla(217,60%,22%,.6);border-color:hsla(217,50%,38%,.6);color:hsl(217,15%,94%)}
+.msg.user .bubble td{border-color:hsla(217,50%,38%,.6)}
+.msg .bubble details{margin:8px 0;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--code-bg);overflow:hidden}
+.msg .bubble details summary{cursor:pointer;color:var(--text-dim);font-size:12px;padding:7px 10px;user-select:none;display:flex;align-items:center;gap:6px}
+.msg .bubble details summary::before{content:"";width:0;height:0;border-left:5px solid var(--text-dim);border-top:4px solid transparent;border-bottom:4px solid transparent;transition:transform var(--t-fast)}
+.msg .bubble details[open] summary::before{transform:rotate(90deg)}
+.msg .bubble details .reasoning{color:var(--text-dim);font-size:12.5px;font-style:italic;padding:8px 12px;border-top:1px solid var(--border);white-space:pre-wrap}
+
+.thinking-indicator{display:inline-flex;align-items:center;gap:8px;color:var(--text-dim);font-size:13.5px}
+.thinking-indicator .spinner{width:14px;height:14px;border-width:2px}
+
+.empty-state{
+  display:flex;align-items:center;justify-content:center;height:100%;
+  color:var(--text-dim);font-size:14px;flex-direction:column;gap:14px;
+}
+.empty-state .big-icon{
+  width:60px;height:60px;border-radius:var(--radius-lg);
+  display:flex;align-items:center;justify-content:center;
+  background:var(--accent-soft);color:var(--accent);
+}
+.empty-state .big-icon svg.lucide{width:28px;height:28px;stroke-width:1.5}
+.empty-state .empty-text{font-size:13.5px;color:var(--text-dim);font-weight:500}
+.empty-state .empty-sub{font-size:11.5px;color:var(--text-mute)}
+
+.chat-params{
+  display:flex;align-items:center;padding:8px 22px;gap:16px;
+  background:var(--panel);border-top:1px solid var(--border);
+}
+.chat-params-inner{display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+.chat-params .param{font-size:11.5px;color:var(--text-dim);display:inline-flex;align-items:center;gap:5px;font-weight:500}
+.chat-params .param svg.lucide{width:13px;height:13px;color:var(--text-mute)}
+.chat-params input[type=number]{
+  width:58px;font-size:12px;padding:4px 5px;border:1px solid var(--border);
+  border-radius:var(--radius-sm);background:var(--input-bg);color:var(--text);
+  font-family:var(--font-mono);font-variant-numeric:tabular-nums;text-align:center;
+  transition:border-color var(--t-fast),box-shadow var(--t-fast);
+}
+.chat-params input[type=number]:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-ring)}
+.think-switch{cursor:pointer;position:relative;display:inline-flex;align-items:center;gap:6px}
+.think-switch input{position:absolute;opacity:0;width:0;height:0;margin:0;pointer-events:none}
+.think-switch .switch-label{position:relative;display:inline-flex;align-items:center;padding-left:30px;font-size:11.5px;font-weight:500;color:var(--text-dim);line-height:1}
+.think-switch .switch-label::before{content:"";position:absolute;left:0;top:50%;transform:translateY(-50%);width:24px;height:14px;border-radius:8px;background:var(--border-strong);transition:background var(--t) var(--ease)}
+.think-switch .switch-label::after{content:"";position:absolute;left:2px;top:50%;width:10px;height:10px;border-radius:50%;background:#fff;box-shadow:0 1px 2px hsla(0,0%,0%,.3);transition:transform var(--t) var(--ease);transform:translate(0,-50%)}
+.think-switch:has(input:checked) .switch-label::before{background:var(--accent)}
+.think-switch:has(input:checked) .switch-label::after{transform:translate(10px,-50%)}
+.think-switch:focus-within .switch-label::before{box-shadow:0 0 0 3px var(--accent-ring)}
+
+.chat-input-area{
+  padding:11px 22px 14px;background:var(--panel);border-top:1px solid var(--border);
+  display:flex;gap:8px;align-items:flex-end;
+}
+.chat-input-inner{display:flex;gap:8px;align-items:flex-end;flex:1}
+.chat-input-area textarea{
+  flex:1;resize:none;padding:10px 12px;border:1px solid var(--border);
+  border-radius:var(--radius);font-family:var(--font);font-size:13.5px;line-height:1.5;
+  outline:none;min-height:42px;max-height:140px;
+  background:var(--input-bg);color:var(--text);
+  transition:border-color var(--t-fast),box-shadow var(--t-fast);
+}
+.chat-input-area textarea:hover{border-color:var(--border-strong)}
+.chat-input-area textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-ring)}
+.chat-input-area textarea::placeholder{color:var(--text-mute)}
+.send-btn{padding:10px 16px}
+.send-btn svg.lucide{width:15px;height:15px}
+
+/* ── Modals ── */
+.modal-overlay{
+  position:fixed;inset:0;background:var(--overlay);display:flex;
+  align-items:center;justify-content:center;z-index:100;padding:24px;
+  backdrop-filter:blur(8px) saturate(1.2);-webkit-backdrop-filter:blur(8px) saturate(1.2);
+  animation:overlayIn var(--t) var(--ease);
+}
+@keyframes overlayIn{from{opacity:0}to{opacity:1}}
+.modal-box{
+  background:var(--panel);border:1px solid var(--border);
+  border-radius:var(--radius-xl);padding:22px 24px;
+  min-width:460px;max-width:620px;max-height:84vh;overflow-y:auto;
+  box-shadow:var(--shadow-lg);
+  animation:modalIn var(--t-slow) var(--ease-out);
+}
+@keyframes modalIn{from{opacity:0;transform:translateY(14px) scale(.97)}to{opacity:1;transform:translateY(0) scale(1)}}
+.modal-box h3{
+  margin-bottom:18px;font-size:15px;font-weight:600;
+  display:flex;align-items:center;gap:9px;letter-spacing:-.01em;
+}
+.modal-box h3 .h3-icon{width:18px;height:18px;color:var(--accent)}
+.modal-box h3 .modal-name{color:var(--accent);font-weight:700}
+.modal-box .field{margin-bottom:15px}
+.modal-box .field label{
+  display:block;font-size:11px;color:var(--text-dim);
+  margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;
+}
+.modal-box .field input,
+.modal-box .field select{
+  width:100%;padding:8px 11px;border:1px solid var(--border);
+  border-radius:var(--radius);font-size:13px;
+  background:var(--input-bg);color:var(--text);font-family:var(--font);
+  transition:border-color var(--t-fast),box-shadow var(--t-fast);
+}
+.modal-box .field input:focus,
+.modal-box .field select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-ring)}
+.modal-box .field select{
+  appearance:none;-webkit-appearance:none;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23808080' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 10px center;padding-right:30px;
+}
+.modal-box .field input[type=number]{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+.modal-box .field input[type=range]{
+  -webkit-appearance:none;appearance:none;width:calc(100% - 52px);
+  display:inline;vertical-align:middle;height:6px;background:var(--border-strong);
+  border-radius:3px;outline:none;padding:0;border:none;
+}
+.modal-box .field input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none;width:16px;height:16px;border-radius:50%;
+  background:var(--accent);cursor:pointer;border:2px solid var(--panel);
+  box-shadow:0 0 0 1px var(--accent),0 2px 4px hsla(0,0%,0%,.3);transition:transform var(--t-fast);
+}
+.modal-box .field input[type=range]::-webkit-slider-thumb:hover{transform:scale(1.15)}
+.modal-box .field input[type=range]::-moz-range-thumb{width:16px;height:16px;border-radius:50%;background:var(--accent);cursor:pointer;border:2px solid var(--panel);box-shadow:0 0 0 1px var(--accent)}
+.modal-box .field .range-val{
+  display:inline-block;width:48px;text-align:right;
+  font-size:12px;color:var(--text);vertical-align:middle;
+  font-family:var(--font-mono);font-weight:600;font-variant-numeric:tabular-nums;
+}
+.lora-info{font-size:12px;color:var(--text-dim);line-height:1.8;background:var(--panel-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 11px}
+.log-panel{
+  background:var(--code-bg);color:hsl(155,22%,72%);
+  font-size:11px;font-family:var(--font-mono);padding:10px 12px;
+  border-radius:var(--radius-sm);max-height:300px;overflow-y:auto;
+  white-space:pre-wrap;word-break:break-word;margin-top:4px;
+  border:1px solid var(--code-border);line-height:1.6;
+}
+.modal-actions{display:flex;gap:8px;margin-top:20px;justify-content:flex-end}
+
+/* ── Spinner ── */
+.spinner{
+  display:inline-block;width:14px;height:14px;
+  border:2px solid var(--border-strong);border-top-color:var(--accent);
+  border-radius:50%;animation:spin .65s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── Theme toggle ── */
+.theme-toggle{
+  width:30px;height:30px;border-radius:var(--radius);border:1px solid var(--border);
+  background:var(--panel-2);cursor:pointer;display:flex;align-items:center;justify-content:center;
+  color:var(--text-dim);transition:background var(--t-fast),color var(--t-fast),border-color var(--t-fast);
+  flex-shrink:0;
+}
+.theme-toggle:hover{background:var(--panel-hover);color:var(--text);border-color:var(--border-strong)}
+.theme-toggle:focus-visible{outline:none;box-shadow:0 0 0 3px var(--accent-ring)}
+.theme-toggle svg.lucide{width:15px;height:15px}
+.theme-toggle .icon-sun{display:none}
+[data-theme="light"] .theme-toggle .icon-sun{display:inline-flex}
+[data-theme="light"] .theme-toggle .icon-moon{display:none}
+</style>
+</head>
+<body>
+
+<!-- sidebar -->
+<aside class="sidebar">
+  <div class="sidebar-header">
+    <span class="logo-dot"></span><span class="brand">CSP Model Manager</span>
+    <button class="btn btn-xs ghost" onclick="scanModels()" style="margin-left:auto" title="刷新扫描模型列表" aria-label="刷新扫描模型列表"><i data-lucide="refresh-cw"></i><span>刷新</span></button>
+  </div>
+  <div class="gpu-bar" id="gpuBar">loading...</div>
+  <div class="model-list" id="modelList"></div>
+  <div class="side-log" id="sideLog"></div>
+</aside>
+
+<!-- main chat -->
+<main class="main">
+  <div class="chat-header">
+    <i data-lucide="messages-square" class="chat-title-icon"></i>
+    <span class="chat-title">对话</span>
+    <i data-lucide="chevron-right" class="chat-sep"></i>
+    <select id="chatModel"><option value="">-- 选择模型 --</option></select>
+    <span class="status-badge" id="chatStatus"></span>
+    <button class="btn btn-xs ghost new-chat-btn" id="newChatBtn" onclick="newChat()" title="新建对话" aria-label="新建对话" disabled><i data-lucide="square-pen"></i><span>新对话</span></button>
+    <button class="theme-toggle" onclick="toggleTheme()" title="切换主题" aria-label="切换主题"><i data-lucide="moon" class="icon-moon"></i><i data-lucide="sun" class="icon-sun"></i></button>
+  </div>
+  <div class="chat-messages" id="chatMessages">
+    <div class="empty-state">
+      <div class="big-icon"><i data-lucide="messages-square"></i></div>
+      <div class="empty-text">选择模型开始对话</div>
+      <div class="empty-sub">从左侧选择或启动一个模型，然后在下方输入消息</div>
+    </div>
+  </div>
+  <div class="chat-params"><div class="chat-params-inner">
+    <label class="param"><i data-lucide="thermometer"></i><span>温度</span><input type="number" id="temperature" value="0.7" step="0.1" min="0" max="2"></label>
+    <label class="param"><i data-lucide="layers"></i><span>Max tokens</span><input type="number" id="maxTokens" value="2048" step="256" min="128" max="16384"></label>
+    <label class="param think-switch">
+      <i data-lucide="brain"></i>
+      <input type="checkbox" id="enableThinking" checked onchange="this.nextElementSibling.textContent=this.checked?'思考开':'思考关'">
+      <span class="switch-label">思考开</span>
+    </label>
+  </div></div>
+  <div class="chat-input-area"><div class="chat-input-inner">
+    <textarea id="chatInput" rows="1" placeholder="输入消息，Enter 发送" onkeydown="handleKey(event)"></textarea>
+    <button class="btn primary send-btn" id="sendBtn" onclick="sendMessage()"><i data-lucide="send"></i><span class="btn-label">发送</span></button>
+  </div></div>
+</main>
+
+<!-- launch dialog -->
+<div class="modal-overlay" id="launchModal" style="display:none" onclick="closeLaunchModal(event)">
+  <div class="modal-box" onclick="event.stopPropagation()">
+    <h3><i data-lucide="rocket" class="h3-icon"></i>启动: <span class="modal-name" id="launchModelName"></span></h3>
+    <div class="field">
+      <label>GPU 编号</label>
+      <select id="launchGpu"></select>
+    </div>
+    <div class="field">
+      <label>显存占用 (gpu-memory-utilization)</label>
+      <input type="range" id="launchMem" min="0.2" max="1.0" step="0.05" value="0.8" oninput="$('launchMemVal').textContent=this.value">
+      <span class="range-val" id="launchMemVal">0.8</span>
+    </div>
+    <div class="field">
+      <label>最大长度 (max-model-len)</label>
+      <input type="number" id="launchMaxLen" value="12000" step="1000" min="1000" max="65536">
+    </div>
+    <div class="field">
+      <label>最大并发 (max-num-seqs)</label>
+      <input type="number" id="launchMaxSeqs" value="256" step="16" min="16" max="2048">
+    </div>
+    <div class="field" id="loraRankField" style="display:none">
+      <label>LoRA 最大秩 (max-lora-rank)</label>
+      <input type="number" id="launchLoraRank" value="64" step="8" min="8" max="256">
+    </div>
+    <div class="field" id="loraInfoField" style="display:none">
+      <label>LoRA 信息</label>
+      <div class="lora-info">
+        基模: <span id="loraBaseModel"></span><br>
+        适配器: <span id="loraAdapter"></span>
+      </div>
+    </div>
+    <div class="field">
+      <label>实时日志</label>
+      <div class="log-panel" id="launchLog">等待启动...</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeLaunchModal()"><i data-lucide="x"></i>取消</button>
+      <button class="btn primary" id="launchBtn" onclick="doLaunch()"><i data-lucide="play"></i>启动</button>
+    </div>
+  </div>
+</div>
+
+<!-- log viewer modal -->
+<div class="modal-overlay" id="logViewerModal" style="display:none" onclick="closeLogViewer(event)">
+  <div class="modal-box" onclick="event.stopPropagation()" style="min-width:720px">
+    <h3><i data-lucide="scroll-text" class="h3-icon"></i>日志: <span class="modal-name" id="logViewerTitle"></span></h3>
+    <div class="log-panel" id="logViewerContent" style="max-height:520px"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeLogViewer()"><i data-lucide="x"></i>关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Scripts ── -->
+<script>
+const $=id=>document.getElementById(id);
+function escapeHtml(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}
+let activeModel=null, launchingKey=null, logSource=null, streaming=false;
+
+/* ── Theme ── */
+function toggleTheme(){
+  const el=document.documentElement,cur=el.getAttribute('data-theme');
+  el.setAttribute('data-theme',cur==='dark'?'light':'dark');
+}
+
+/* ── Models & GPUs ── */
+async function scanModels(){
+  try{await fetch('/api/scan');refreshModels();loadGpus()}catch(e){}
+}
+async function refreshModels(){
+  try{
+    const models=await(await fetch('/api/models')).json();
+    renderModels(models);
+    updateChatSelect(models);
+  }catch(e){}
+}
+async function loadGpus(){
+  try{
+    const gpus=await(await fetch('/api/gpus')).json();
+    let h=gpus.map(g=>{
+      let tot=g.total_mb||0,used=g.used_mb||0,free=g.free_mb||0;
+      let pct=tot?Math.min(100,Math.max(0,Math.round(used/tot*100))):0;
+      let fg=(free/1024).toFixed(0),tg=(tot/1024).toFixed(0);
+      let busy=pct>=85;
+      return `<span class="gpu-chip${busy?' busy':''}" title="GPU ${g.index} · ${escapeHtml(g.name)} · ${fg}G free / ${tg}G"><span class="gpu-chip-label">GPU${g.index}</span><span class="gpu-chip-track"><span class="gpu-chip-fill" style="width:${pct}%"></span></span><span class="gpu-chip-val">${fg}G</span></span>`;
+    }).join(' ');
+    $('gpuBar').innerHTML=h||'<span style="color:var(--text-mute);font-size:11px">无 GPU 数据</span>';
+    let sel=$('launchGpu'),cur=sel.value;
+    sel.innerHTML=gpus.map(g=>
+      `<option value="${g.index}" ${String(g.index)===cur?'selected':''}>GPU ${g.index} &mdash; ${escapeHtml(g.name)} (${(g.free_mb/1024).toFixed(0)}G free)</option>`
+    ).join('');
+  }catch(e){}
+}
+
+function renderContent(text){
+  /* Extract & render math first — before escapeHtml */
+  let math=[];
+  let process=text
+    .replace(/\$\$([\s\S]*?)\$\$/g,(_,m)=>{try{math.push(katex.renderToString(m.trim(),{displayMode:true,throwOnError:false}))}catch(e){math.push(escapeHtml(m))}return'\x00MATH'+(math.length-1)+'\x00'})
+    .replace(/\\\[([\s\S]*?)\\\]/g,(_,m)=>{try{math.push(katex.renderToString(m.trim(),{displayMode:true,throwOnError:false}))}catch(e){math.push(escapeHtml(m))}return'\x00MATH'+(math.length-1)+'\x00'})
+    .replace(/\$([^$]+?)\$/g,(_,m)=>{try{math.push(katex.renderToString(m.trim(),{displayMode:false,throwOnError:false}))}catch(e){math.push(escapeHtml(m))}return'\x00MATH'+(math.length-1)+'\x00'})
+    .replace(/\\\(([\s\S]*?)\\\)/g,(_,m)=>{try{math.push(katex.renderToString(m.trim(),{displayMode:false,throwOnError:false}))}catch(e){math.push(escapeHtml(m))}return'\x00MATH'+(math.length-1)+'\x00'});
+  let out=escapeHtml(process);
+  /* Extract tables — placeholders so \n→<br> won't break HTML */
+  let tables=[];
+  out=out.replace(/(<table>[\s\S]*?<\/table>)/g,(_,t)=>{tables.push(t);return'\x00TBL'+(tables.length-1)+'\x00'});
+  /* Markdown pipeline */
+  out=out.replace(/```(\w*)\n?([\s\S]*?)```/g,(_,lang,code)=>{return'<span class="code-block">'+code.replace(/\n$/,'')+'</span>'});
+  out=out.replace(/`([^`]+)`/g,'<span class="inline-code">$1</span>');
+  out=out.replace(/\*\*([^*\n]+?)\*\*/g,'<strong>$1</strong>');
+  out=out.replace(/(?<!\*)\*([^*\n]+?)\*(?!\*)/g,'<em>$1</em>');
+  out=out.replace(/^#### (.+)$/gm,'<h4>$1</h4>');
+  out=out.replace(/^### (.+)$/gm,'<h3>$1</h3>');
+  out=out.replace(/^## (.+)$/gm,'<h2>$1</h2>');
+  out=out.replace(/^# (.+)$/gm,'<h1>$1</h1>');
+  out=out.replace(/^---$/gm,'<hr>');
+  out=out.replace(/^&gt; (.+)$/gm,'<blockquote>$1</blockquote>');
+  out=out.replace(/^[\-\*] (.+)$/gm,'<li>$1</li>');
+  out=out.replace(/^\d+\. (.+)$/gm,'<li>$1</li>');
+  out=out.replace(/((?:<li>.*<\/li>\n?)+)/g,'<ul>$1</ul>');
+  /* Build tables from pipe syntax */
+  let lines=out.split('\n'),inTbl=false,tbl=[],res=[];
+  for(let i=0;i<lines.length;i++){
+    let ln=lines[i].trim();
+    if(/^\|.+\|$/.test(ln)){
+      if(!inTbl){inTbl=true;tbl=[]}
+      let cells=ln.split('|').filter(c=>c.trim()!=='');
+      let isSep=/^[\-\s:]+$/.test(cells.join(''));
+      if(!isSep){let tag=tbl.length===0?'th':'td';tbl.push('<tr>'+cells.map(c=>'<'+tag+'>'+c.trim()+'</'+tag+'>').join('')+'</tr>')}
+    }else{
+      if(inTbl){tables.push('<table>'+tbl.join('')+'</table>');res.push('\x00TBL'+(tables.length-1)+'\x00');inTbl=false;tbl=[]}
+      res.push(ln);
+    }
+  }
+  if(inTbl){tables.push('<table>'+tbl.join('')+'</table>');res.push('\x00TBL'+(tables.length-1)+'\x00')}
+  out=res.join('\n');
+  /* Paragraph / line breaks — placeholders survive */
+  out=out.replace(/\n\n+/g,'<br><br>');
+  out=out.replace(/\n/g,'<br>');
+  /* Restore tables & math LAST */
+  out=out.replace(/\x00TBL(\d+)\x00/g,(_,n)=>tables[parseInt(n)]||'');
+  out=out.replace(/\x00MATH(\d+)\x00/g,(_,n)=>math[parseInt(n)]||'');
+  return out;
+}
+
+function renderModels(models){
+  const list=$('modelList'); list.innerHTML='';
+  models.forEach(m=>{
+    const row=document.createElement('div');
+    const isLoading=m.loading;
+    row.className=(m.key===activeModel?'active ':'')+'model-row';
+    if(m.running){
+      if(isLoading) row.classList.add('status-loading');
+      else row.classList.add('status-on');
+    }else{row.classList.add('status-off')}
+    row.onclick=()=>selectModel(m.key,m.running);
+    const dot=document.createElement('div');
+    dot.className='status '+(m.running?(isLoading?'loading':'on'):'off');
+    if(isLoading)dot.title='启动中...';
+    row.appendChild(dot);
+    const info=document.createElement('div'); info.className='info';
+    const name=document.createElement('div'); name.className='name'; name.textContent=m.display_name;
+    const detail=document.createElement('div'); detail.className='detail';
+    let parts=['GPU'+(m.gpu||'N/A')];
+    if(m.port)parts.push(':'+m.port);
+    if(isLoading)parts.push('[启动中]');
+    else if(m.running&&!m.pid)parts.push('[外部检测]');
+    if(m.pid&&m.running)parts.push('pid='+m.pid);
+    detail.textContent=parts.join(' · ');
+    info.appendChild(name); info.appendChild(detail);
+    row.appendChild(info);
+    const act=document.createElement('div'); act.className='actions';
+    if(m.running && m.provider!=='deepseek'){
+      const logBtn=document.createElement('span');
+      logBtn.className='side-log-btn'; logBtn.innerHTML='<i data-lucide="scroll-text"></i>日志';
+      logBtn.onclick=e=>{e.stopPropagation();toggleSideLog(m.key);};
+      act.appendChild(logBtn);
+    }
+    if(m.provider==='deepseek'){
+      const span=document.createElement('span');
+      span.className='provider-tag'; span.innerHTML='<i data-lucide="cloud"></i>API'; act.appendChild(span);
+    }else if(m.running){
+      const btn=document.createElement('button'); btn.className='btn danger btn-xs'; btn.innerHTML='<i data-lucide="square"></i>停止';
+      btn.onclick=e=>{e.stopPropagation();stopModel(m.key);};
+      act.appendChild(btn);
+    }else{
+      const btn=document.createElement('button'); btn.className='btn primary btn-xs'; btn.innerHTML='<i data-lucide="play"></i>启动';
+      btn.onclick=e=>{e.stopPropagation();openLaunch(m.key,m.display_name);};
+      act.appendChild(btn);
+    }
+    row.appendChild(act);
+    list.appendChild(row);
+  });
+  if(window.lucide)lucide.createIcons({root:list});
+}
+function updateChatSelect(models){
+  let sel=$('chatModel'),cur=sel.value;
+  let opts='<option value="">-- 选择模型 --</option>';
+  models.forEach(m=>opts+=`<option value="${escapeHtml(m.key)}" ${m.key===cur?'selected':''}>${escapeHtml(m.display_name)}</option>`);
+  sel.innerHTML=opts;
+}
+function selectModel(key,running){
+  activeModel=key;
+  const badge=$('chatStatus');
+  badge.textContent=running?'已就绪':'未启动';
+  badge.className=running?'status-badge ready':'status-badge off';
+  refreshModels();
+  setTimeout(()=>{$('chatModel').value=key},50);
+  // selecting a (different) model from the sidebar starts a fresh conversation
+  if(!streaming)newChat();
+}
+
+/* ── New / clear conversation ── */
+function newChat(){
+  if(streaming)return;
+  let container=$('chatMessages');
+  container.innerHTML='<div class="empty-state"><div class="big-icon"><i data-lucide="messages-square"></i></div><div class="empty-text">开始新对话</div><div class="empty-sub">输入消息，Enter 发送</div></div>';
+  if(window.lucide)lucide.createIcons({root:container});
+  $('newChatBtn').disabled=true;
+  $('chatInput').focus();
+ }
+
+/* ── New / clear conversation ── */
+function newChat(){
+  if(streaming)return;
+  let container=$('chatMessages');
+  container.innerHTML='<div class="empty-state"><div class="big-icon"><i data-lucide="messages-square"></i></div><div class="empty-text">开始新对话</div><div class="empty-sub">输入消息，Enter 发送</div></div>';
+  if(window.lucide)lucide.createIcons({root:container});
+  $('newChatBtn').disabled=true;
+  $('chatInput').focus();
+ }
+
+/* ── Launch ── */
+let currentLaunchModel=null;
+async function openLaunch(key,name){
+  try{await loadGpus()}catch(e){alert('加载GPU信息失败: '+e.message);return}
+  launchingKey=key;
+  $('launchModelName').textContent=name;$('launchLog').textContent='';
+  $('launchBtn').disabled=false;
+  $('launchModal').style.display='flex';
+  // Fetch model info to detect LoRA config
+  try{
+    let models=await(await fetch('/api/models')).json();
+    let m=models.find(x=>x.key===key);
+    currentLaunchModel=m;
+    if(m&&m.lora_path){
+      $('loraRankField').style.display='block';
+      $('loraInfoField').style.display='block';
+      $('launchLoraRank').value=m.max_lora_rank||64;
+      $('loraBaseModel').textContent=m.base_model_path||'(unknown)';
+      $('loraAdapter').textContent=m.lora_path||'(unknown)';
+    }else{
+      $('loraRankField').style.display='none';
+      $('loraInfoField').style.display='none';
+      $('loraBaseModel').textContent='';
+      $('loraAdapter').textContent='';
+    }
+  }catch(e){}
+}
+
+let sideLogKey=null, sideLogSource=null;
+function closeLogViewer(e,forceClose){
+  if(e&&e.target!==$('logViewerModal'))return;
+  $('logViewerModal').style.display='none';
+  if(sideLogSource){sideLogSource.close();sideLogSource=null}
+  sideLogKey=null;
+}
+async function toggleSideLog(key,forceClose){
+  if(forceClose){closeLogViewer();return}
+  sideLogKey=key;
+  $('logViewerModal').style.display='flex';
+  $('logViewerTitle').textContent=key;
+  const panel=$('logViewerContent');
+  panel.textContent='加载日志...';
+  try{
+    const r=await fetch('/api/log/'+key+'/history'); const d=await r.json();
+    panel.textContent=d.lines.join('')||'(暂无日志)';
+  }catch(e){panel.textContent='Failed: '+e}
+  panel.scrollTop=panel.scrollHeight;
+  if(sideLogSource){sideLogSource.close();sideLogSource=null}
+  sideLogSource=new EventSource('/api/log/'+key);
+  sideLogSource.onmessage=e=>{
+    if(e.data==='[EOF]'){panel.textContent+='\n--- 加载完毕 ---';sideLogSource.close();sideLogSource=null;return}
+    try{let j=JSON.parse(e.data);panel.textContent+=j.text;panel.scrollTop=panel.scrollHeight}catch(ex){}
+  };
+  sideLogSource.onerror=()=>{if(sideLogSource){sideLogSource.close();sideLogSource=null}};
+}
+function closeLaunchModal(e){
+  if(e&&e.target!==$('launchModal'))return;
+  $('launchModal').style.display='none';
+}
+async function doLaunch(){
+  $('launchBtn').disabled=true;
+  $('launchModal').style.display='none';
+  try{
+    let r=await fetch('/api/launch/'+launchingKey,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({gpu:parseInt($('launchGpu').value),gpu_memory_utilization:parseFloat($('launchMem').value),max_model_len:parseInt($('launchMaxLen').value),max_num_seqs:parseInt($('launchMaxSeqs').value),max_lora_rank:parseInt($('launchLoraRank').value)})
+    });
+    let d=await r.json();
+    if(!d.ok){alert('启动失败: '+JSON.stringify(d));refreshModels();return}
+  }catch(e){alert('启动失败: '+e)}
+  refreshModels();
+  setTimeout(refreshModels,4000);
+  setTimeout(refreshModels,10000);
+}
+async function stopModel(key){
+  if(!confirm('停止模型 '+key+'?'))return;
+  await fetch(`/api/stop/${key}`,{method:'POST'});
+  refreshModels();
+}
+
+/* ── Chat ── */
+function handleKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage()}}
+async function sendMessage(){
+  let sel=$('chatModel'), key=sel.value, input=$('chatInput'), text=input.value.trim();
+  if(!key){input.placeholder='请先在右上角选择对话模型';input.value='';return}
+  if(!text)return;
+  if(streaming){input.placeholder='正在回复中，请稍候...';return}
+  streaming=true;$('sendBtn').disabled=true;$('sendBtn').querySelector('.btn-label').textContent='发送中';
+  let container=$('chatMessages');
+  if(container.querySelector('.empty-state'))container.innerHTML='';
+  appendMsg('user',text);input.value='';input.style.height='auto';
+  $('newChatBtn').disabled=false;
+  let asstDiv=appendMsg('assistant',''), bubble=asstDiv.querySelector('.bubble');
+  asstDiv.setAttribute('data-raw','');
+  bubble.innerHTML='<span class="thinking-indicator"><span class="spinner"></span>思考中...</span>';
+  let msgs=[];
+  container.querySelectorAll('.msg').forEach(el=>{
+    let role=el.classList.contains('user')?'user':'assistant',
+      c=el.getAttribute('data-raw')||el.querySelector('.bubble').textContent;
+    if(c && c!=='思考中...')msgs.push({role,content:c});
+  });
+  if(!msgs.length){bubble.textContent='无消息历史';streaming=false;$('sendBtn').disabled=false;$('sendBtn').querySelector('.btn-label').textContent='发送';return}
+  let reader,fullContent='',fullReason='';
+  try{
+    let r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({model_key:key,messages:msgs,temperature:parseFloat($('temperature').value),max_tokens:parseInt($('maxTokens').value),stream:true,enable_thinking:$('enableThinking').checked})});
+    if(!r.ok){bubble.textContent='Error '+r.status+': '+(await r.text()).slice(0,200);return}
+    reader=r.body.getReader();let decoder=new TextDecoder();
+    while(true){
+      let{value,done}=await reader.read();
+      if(done)break;
+      for(let line of decoder.decode(value,{stream:true}).split(/\r?\n/)){
+        line=line.trim();if(!line.startsWith('data: '))continue;
+        let d=line.slice(6);if(d==='[DONE]')break;
+        try{let j=JSON.parse(d.trim()),delta=j.choices?.[0]?.delta;if(delta){
+  if(delta.content){fullContent+=delta.content}
+  if(delta.reasoning){fullReason+=delta.reasoning}
+  let display=renderContent(fullContent);
+  if(fullReason)display='<details open><summary>思考过程</summary><div class="reasoning">'+escapeHtml(fullReason)+'</div></details>'+display;
+  bubble.innerHTML=display;container.scrollTop=container.scrollHeight;
+}}catch(ex){}
+      }
+    }
+    if(!fullContent&&!fullReason)bubble.textContent='(模型返回空)';
+    asstDiv.setAttribute('data-raw',fullContent);
+  }catch(e){
+    bubble.textContent='连接失败: '+e.message;
+    bubble.style.color='var(--red)';
+    try{if(reader)reader.cancel()}catch(_){}
+  }finally{
+    streaming=false;
+    $('sendBtn').disabled=false;$('sendBtn').querySelector('.btn-label').textContent='发送';
+    input.focus();
+  }
+}
+
+function appendMsg(role,text){
+  let container=$('chatMessages'),div=document.createElement('div');
+  div.className='msg '+role;div.setAttribute('data-role',role);
+  div.setAttribute('data-raw',role==='user'?text:'');
+  let bubble=document.createElement('div');bubble.className='bubble';
+  bubble.innerHTML=renderContent(text)
+  div.appendChild(bubble);
+  container.appendChild(div);container.scrollTop=container.scrollHeight;
+  return div;
+}
+
+$('chatModel').addEventListener('change',async()=>{
+  let key=$('chatModel').value;
+  if(!key){activeModel=null;$('chatStatus').textContent='';$('chatStatus').className='';$('newChatBtn').disabled=true;return}
+  activeModel=key;
+  try{
+    let models=await(await fetch('/api/models')).json();
+    let m=models.find(x=>x.key===key),badge=$('chatStatus');
+    badge.textContent=m?.running?'已就绪':'未启动';
+    badge.className=m?.running?'status-badge ready':'status-badge off';
+  }catch(e){}
+  refreshModels();
+  // switching model starts a fresh conversation
+  newChat();
+});
+
+$('chatInput').addEventListener('input',function(){
+  this.style.height='auto';this.style.height=Math.min(this.scrollHeight,140)+'px';
+});
+
+/* ── Init ── */
+if(window.lucide)lucide.createIcons();
+refreshModels();loadGpus();setInterval(refreshModels,15000);setInterval(loadGpus,30000);
+</script>
+</body>
+</html>
