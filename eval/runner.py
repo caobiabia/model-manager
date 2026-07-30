@@ -1,0 +1,530 @@
+"""Unified evaluation runner.
+
+Processes the cartesian product of *models x benches* sequentially.
+Within each (model, bench) pair, questions are answered concurrently via
+a thread pool with **rolling submission** (only workers+1 futures alive
+at any time). This makes stop responsive: setting the stop flag prevents
+new futures from being submitted and in-flight ones check the flag.
+
+Resume: if a results file already exists for a (model, bench, mode) triple,
+already-processed question indices are skipped.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import threading
+import time
+import concurrent.futures
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+from pathlib import Path
+from queue import Queue
+from threading import Lock
+from typing import Any
+
+from eval.common import (
+    EVAL_OUTPUT_DIR,
+    call_model,
+    create_client,
+    extract_answer,
+    get_extract_model,
+    load_processed_ids,
+    save_progress,
+)
+from eval.benches import get_bench
+from model_config import get_model_by_name
+
+# Abort a (model, bench) pair after this many consecutive failures
+# (indicates the model is unreachable / misconfigured).
+MAX_CONSECUTIVE_ERRORS = 5
+
+
+class EvalRunner:
+    """Run one evaluation pass across models x benches."""
+
+    def __init__(
+        self,
+        run_id: str,
+        model_keys: list[str],
+        bench_ids: list[str],
+        mode: str = "cot",
+        workers: int = 10,
+        limit: int = 0,
+        no_resume: bool = False,
+    ):
+        self.run_id = run_id
+        self.model_keys = model_keys
+        self.bench_ids = bench_ids
+        self.mode = mode
+        self.workers = workers
+        self.limit = limit
+        self.no_resume = no_resume
+
+        self.queue: Queue[dict | None] = Queue()
+        self._stop = threading.Event()
+        self._write_lock = Lock()
+
+        self.output_dir = EVAL_OUTPUT_DIR / run_id
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        self.results: dict[tuple[str, str], dict] = {}
+        self.error: str | None = None
+
+    # -- public API -------------------------------------------------------
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    @property
+    def stopped(self) -> bool:
+        return self._stop.is_set()
+
+    def run(self) -> None:
+        """Main entry -- call from a background thread."""
+        try:
+            self.queue.put({
+                "type": "start",
+                "run_id": self.run_id,
+                "mode": self.mode,
+                "model_keys": self.model_keys,
+                "bench_ids": self.bench_ids,
+                "total_pairs": len(self.model_keys) * len(self.bench_ids),
+            })
+
+            self._save_config()
+
+            # Run all models in parallel -- each model gets its own
+            # thread, and within each model all benches run concurrently.
+            # This works well when models are on different GPUs.
+            model_threads = []
+            for model_key in self.model_keys:
+                if self.stopped:
+                    break
+                t = threading.Thread(target=self._run_model, args=(model_key,))
+                model_threads.append(t)
+                t.start()
+            for t in model_threads:
+                t.join()
+
+            self._save_summary()
+            if self.error:
+                self.queue.put({
+                    "type": "error", "run_id": self.run_id,
+                    "message": self.error,
+                })
+            else:
+                self.queue.put({
+                    "type": "done",
+                    "run_id": self.run_id,
+                    "results": [
+                        {**v, "model_key": k[0], "bench_id": k[1]}
+                        for k, v in self.results.items()
+                    ],
+                })
+        except Exception as e:
+            self.queue.put({"type": "error", "run_id": self.run_id, "message": str(e)})
+        finally:
+            self.queue.put(None)  # sentinel for SSE EOF
+
+    # -- per-model --------------------------------------------------------
+
+    def _run_model(self, model_key: str) -> None:
+        cfg = get_model_by_name(model_key)
+        if cfg is None:
+            self.queue.put({
+                "type": "skip", "model_key": model_key,
+                "reason": f"Unknown model: {model_key}",
+            })
+            return
+
+        client, model_name, is_deepseek = create_client(cfg)
+        ext_client, ext_model, ext_deepseek = get_extract_model()
+
+        self.queue.put({
+            "type": "model_start",
+            "model_key": model_key,
+            "model_name": cfg.get("display_name", model_key),
+            "bench_ids": self.bench_ids,
+        })
+
+        # Run all benches concurrently, distributing workers evenly.
+        # Each bench gets at least 1 worker; total = workers_per_bench * n_benches.
+        n_benches = len(self.bench_ids)
+        workers_per_bench = max(1, self.workers // n_benches) if n_benches else 1
+
+        threads = []
+        for bench_id in self.bench_ids:
+            if self.stopped:
+                break
+            t = threading.Thread(
+                target=self._run_bench,
+                args=(model_key, bench_id, client, model_name,
+                      is_deepseek, ext_client, ext_model, ext_deepseek,
+                      workers_per_bench),
+            )
+            threads.append(t)
+            t.start()
+        for t in threads:
+            t.join()
+
+    # -- per-(model, bench) ----------------------------------------------
+
+    def _run_bench(
+        self,
+        model_key: str,
+        bench_id: str,
+        client,
+        model_name: str,
+        is_deepseek: bool,
+        ext_client,
+        ext_model: str | None,
+        ext_deepseek: bool,
+        workers: int,
+    ) -> None:
+        bench = get_bench(bench_id)
+        if bench is None:
+            self.queue.put({"type": "skip", "model_key": model_key,
+                            "bench_id": bench_id, "reason": "Unknown bench"})
+            return
+
+        if not Path(bench.data_file).exists():
+            self.queue.put({
+                "type": "skip", "model_key": model_key, "bench_id": bench_id,
+                "reason": f"Data file not found: {bench.data_file}",
+            })
+            return
+
+        questions = bench.load_questions()
+        total = len(questions)
+
+        model_short = model_name.split("/")[-1]
+        results_file = str(
+            self.output_dir / f"{model_short}__{bench_id}__{self.mode}.json"
+        )
+        progress_file = str(
+            self.output_dir / f"progress_{model_short}_{bench_id}_{self.mode}.txt"
+        )
+
+        if self.no_resume:
+            for f in [results_file, progress_file]:
+                if os.path.exists(f):
+                    os.remove(f)
+
+        processed_ids = load_processed_ids(progress_file)
+        to_process: list[tuple[int, dict]] = []
+        for i, q in enumerate(questions):
+            realidx = q.get("realidx", i)
+            if realidx in processed_ids:
+                continue
+            if self.limit > 0 and len(to_process) >= self.limit:
+                break
+            to_process.append((i, q))
+
+        if os.path.exists(results_file):
+            with open(results_file, "r", encoding="utf-8") as f:
+                results = json.load(f)
+        else:
+            results = []
+
+        self.queue.put({
+            "type": "pair_start",
+            "model_key": model_key, "bench_id": bench_id,
+            "bench_name": bench.name, "total": total,
+            "resume_skipped": total - len(to_process),
+        })
+
+        if not to_process:
+            # All already processed (resume)
+            correct = sum(1 for r in results if r.get("correct") is True)
+            acc = correct / len(results) * 100 if results else 0
+            self.results[(model_key, bench_id)] = {
+                "model_key": model_key, "bench_id": bench_id,
+                "bench_name": bench.name, "mode": self.mode,
+                "processed": len(results), "correct": correct,
+                "accuracy": round(acc, 2), "time_elapsed": 0,
+                "results_file": results_file,
+            }
+            self.queue.put({
+                "type": "pair_done", "model_key": model_key,
+                "bench_id": bench_id, "bench_name": bench.name,
+                "processed": len(results), "correct": correct,
+                "accuracy": round(acc, 2), "time": 0,
+            })
+            return
+
+        completed = len(processed_ids)
+        start_time = time.time()
+        consecutive_errors = 0
+        aborted = False
+
+        def process_one(idx: int, problem: dict) -> dict | None:
+            if self._stop.is_set():
+                return None
+            realidx = problem.get("realidx", idx)
+            question = problem.get("question", "")
+            options = problem.get("options", {})
+            answer_idx = problem.get("answer_idx", "")
+            if not question or not options:
+                return None
+
+            messages = bench.build_messages(problem, self.mode)
+            q_start = time.time()
+
+            try:
+                raw, reasoning, usage = call_model(
+                    client, model_name, messages, self.mode, is_deepseek,
+                )
+            except Exception as e:
+                return {"realidx": realidx, "error": str(e)}
+
+            pred = extract_answer(
+                raw, options, ext_client, ext_model, ext_deepseek,
+            )
+            if pred is None:
+                pred = extract_answer(
+                    reasoning, options, ext_client, ext_model, ext_deepseek,
+                )
+
+            correct = None
+            if pred is not None:
+                correct = (pred == answer_idx)
+
+            prompt_tokens = usage.prompt_tokens if usage else 0
+            completion_tokens = usage.completion_tokens if usage else 0
+            elapsed = time.time() - q_start
+
+            return {
+                "realidx": realidx,
+                "question": question,
+                "options": options,
+                "answer_idx": answer_idx,
+                "predicted_answer": pred or "",
+                "correct": correct,
+                "raw_response": raw,
+                "reasoning": reasoning,
+                "token_usage": {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                },
+                "time_elapsed": elapsed,
+            }
+
+        # -- rolling submission: only workers+1 futures alive at a time --
+        # This makes stop responsive: new futures aren't submitted after
+        # the stop flag is set, and process_one checks it at entry.
+        # We manage the executor manually (not via ``with``) so that on
+        # stop we can shutdown(wait=False) instead of blocking on
+        # in-flight API calls that may take 30-60s each.
+        executor = ThreadPoolExecutor(max_workers=workers)
+        future_map: dict = {}
+        next_idx = 0
+
+        # Pre-fill the pool
+        for _ in range(min(workers, len(to_process))):
+            if self.stopped:
+                break
+            idx, q = to_process[next_idx]
+            future_map[executor.submit(process_one, idx, q)] = (
+                idx, q.get("realidx", idx))
+            next_idx += 1
+
+        while future_map:
+            # Wait for at least one future to complete (poll every 2s)
+            done_set, _ = concurrent.futures.wait(
+                future_map.keys(),
+                timeout=2.0,
+                return_when=concurrent.futures.FIRST_COMPLETED,
+            )
+
+            # Nothing completed within timeout — check stop
+            if not done_set:
+                if self.stopped:
+                    break
+                continue
+
+            for future in done_set:
+                i, realidx = future_map.pop(future)
+
+                # Submit next question if not stopped
+                if not self.stopped and next_idx < len(to_process):
+                    idx, q = to_process[next_idx]
+                    future_map[executor.submit(process_one, idx, q)] = (
+                        idx, q.get("realidx", idx))
+                    next_idx += 1
+
+                try:
+                    result = future.result()
+                except Exception as e:
+                    result = {"realidx": realidx, "error": str(e)}
+
+                if result is not None:
+                    with self._write_lock:
+                        results.append(result)
+                        results.sort(key=lambda x: x.get("realidx", 0))
+                        with open(results_file, "w", encoding="utf-8") as f:
+                            json.dump(results, f, indent=2, ensure_ascii=False)
+
+                save_progress(progress_file, realidx)
+                completed += 1
+
+                # Track consecutive errors
+                if result and "error" in result:
+                    consecutive_errors += 1
+                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                        aborted = True
+                        self.error = (
+                            f"Model '{model_key}' appears unreachable "
+                            f"({MAX_CONSECUTIVE_ERRORS} consecutive failures). "
+                            f"Last error: {result.get('error', 'unknown')}"
+                        )
+                        self._stop.set()
+                        break
+                else:
+                    consecutive_errors = 0
+
+                correct_count = sum(
+                    1 for r in results if r.get("correct") is True
+                )
+                processed_count = len(results)
+                acc = (
+                    correct_count / processed_count * 100
+                    if processed_count > 0
+                    else 0
+                )
+
+                if completed % 5 == 0 or completed == total:
+                    elapsed = time.time() - start_time
+                    self.queue.put({
+                        "type": "progress",
+                        "model_key": model_key, "bench_id": bench_id,
+                        "done": completed, "total": total,
+                        "correct": correct_count,
+                        "accuracy": round(acc, 1),
+                        "elapsed": round(elapsed, 0),
+                    })
+
+            if aborted:
+                break
+
+        # Shutdown: if stopped, don't wait for in-flight API calls
+        executor.shutdown(wait=not self.stopped, cancel_futures=self.stopped)
+
+        elapsed = time.time() - start_time
+        correct_count = sum(1 for r in results if r.get("correct") is True)
+        processed_count = len(results)
+        accuracy = correct_count / processed_count * 100 if processed_count > 0 else 0
+        total_prompt = sum(
+            r.get("token_usage", {}).get("prompt_tokens", 0) for r in results
+        )
+        total_completion = sum(
+            r.get("token_usage", {}).get("completion_tokens", 0) for r in results
+        )
+
+        summary = {
+            "model_key": model_key,
+            "bench_id": bench_id,
+            "bench_name": bench.name,
+            "mode": self.mode,
+            "processed": processed_count,
+            "correct": correct_count,
+            "accuracy": round(accuracy, 2),
+            "total_prompt_tokens": total_prompt,
+            "total_completion_tokens": total_completion,
+            "time_elapsed": round(elapsed, 0),
+            "results_file": results_file,
+            "aborted": aborted,
+        }
+        self.results[(model_key, bench_id)] = summary
+
+        self.queue.put({
+            "type": "pair_done",
+            "model_key": model_key, "bench_id": bench_id,
+            "bench_name": bench.name,
+            "processed": processed_count, "correct": correct_count,
+            "accuracy": round(accuracy, 2), "time": round(elapsed, 0),
+            "aborted": aborted,
+        })
+
+    def get_progress(self):
+        # Return current progress snapshot for all (model, bench) pairs.
+        with self._progress_lock:
+            return {k: dict(v) for k, v in self.progress.items()}
+
+    # -- persistence ------------------------------------------------------
+
+    def _save_config(self) -> None:
+        config = {
+            "run_id": self.run_id,
+            "model_keys": self.model_keys,
+            "bench_ids": self.bench_ids,
+            "mode": self.mode,
+            "workers": self.workers,
+            "limit": self.limit,
+            "no_resume": self.no_resume,
+            "started_at": datetime.now().isoformat(),
+        }
+        with open(self.output_dir / "config.json", "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
+
+    def _save_summary(self) -> None:
+        started_at = ""
+        config_file = self.output_dir / "config.json"
+        if config_file.exists():
+            try:
+                started_at = json.loads(config_file.read_text()).get("started_at", "")
+            except Exception:
+                pass
+        summary = {
+            "run_id": self.run_id,
+            "mode": self.mode,
+            "started_at": started_at,
+            "finished_at": datetime.now().isoformat(),
+            "status": "aborted" if self.stopped else ("error" if self.error else "completed"),
+            "results": [
+                {**v, "model_key": k[0], "bench_id": k[1]}
+                for k, v in self.results.items()
+            ],
+        }
+        if self.error:
+            summary["error"] = self.error
+        with open(self.output_dir / "summary.json", "w", encoding="utf-8") as f:
+            json.dump(summary, f, indent=2, ensure_ascii=False)
+
+
+# -- helpers for the API layer --------------------------------------------
+
+def create_run_id() -> str:
+    return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+def list_runs() -> list[dict[str, Any]]:
+    runs: list[dict[str, Any]] = []
+    if not EVAL_OUTPUT_DIR.exists():
+        return runs
+    for entry in sorted(EVAL_OUTPUT_DIR.iterdir(), reverse=True):
+        if not entry.is_dir():
+            continue
+        meta: dict[str, Any] = {"run_id": entry.name}
+        config_file = entry / "config.json"
+        if config_file.exists():
+            try:
+                meta["config"] = json.loads(config_file.read_text())
+            except Exception:
+                pass
+        summary_file = entry / "summary.json"
+        if summary_file.exists():
+            try:
+                summary = json.loads(summary_file.read_text())
+                meta["status"] = summary.get("status", "completed")
+                meta["summary"] = summary
+            except Exception:
+                pass
+        else:
+            has_progress = any(
+                f.name.startswith("progress_") for f in entry.iterdir()
+            )
+            meta["status"] = "running" if has_progress else "completed"
+        runs.append(meta)
+    return runs

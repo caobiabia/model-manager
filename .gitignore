@@ -25,3 +25,7 @@ node_modules/
 # Editor
 .idea/
 .vscode/
+
+# Eval output (results, checkpoints)
+eval/output/
+eval/leaderboard.json

@@ -122,6 +122,7 @@ class LaunchRequest(BaseModel):
     max_model_len: int | None = None
     max_num_seqs: int = 256
     max_lora_rank: int = 64
+    enforce_eager: bool = False
 
 
 class ChatMessage(BaseModel):
@@ -149,12 +150,14 @@ def _get_lock(key: str) -> asyncio.Lock:
 _FLAG_LIKE_ARGS: frozenset[str] = frozenset({
     "trust-remote-code", "async-scheduling", "language-model-only",
     "enable-prefix-caching",
+    "enforce-eager",
 })
 
 
 def _build_vllm_cmd(cfg: dict, gpu: int, gpu_memory_utilization: float,
                      max_model_len: int, max_num_seqs: int,
-                     max_lora_rank: int = 64) -> list[str]:
+                     max_lora_rank: int = 64,
+                     enforce_eager: bool = False) -> list[str]:
     """Build vLLM CLI from model-config vllm_args, merged with request overrides."""
     # Determine model path: use base_model_path for LoRA, otherwise model_path
     model_src = cfg.get("base_model_path") or cfg.get("model_path")
@@ -173,6 +176,7 @@ def _build_vllm_cmd(cfg: dict, gpu: int, gpu_memory_utilization: float,
     merged["gpu-memory-utilization"] = gpu_memory_utilization
     merged["max-model-len"] = max_model_len
     merged["max-num-seqs"] = max_num_seqs
+    merged["enforce-eager"] = enforce_eager
 
     # Ensure host / port / served-model-name
     merged["host"] = "0.0.0.0"
@@ -360,6 +364,7 @@ async def launch_model(model_key: str, body: LaunchRequest = LaunchRequest()):
         cmd = _build_vllm_cmd(
             cfg, gpu, body.gpu_memory_utilization, max_len, body.max_num_seqs,
             max_lora_rank=body.max_lora_rank,
+            enforce_eager=body.enforce_eager,
         )
 
         env = os.environ.copy()
@@ -371,6 +376,7 @@ async def launch_model(model_key: str, body: LaunchRequest = LaunchRequest()):
             proc = subprocess.Popen(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, bufsize=1, env=env,
+                start_new_session=True,
             )
         except FileNotFoundError:
             raise HTTPException(500, "vLLM binary not found in .venv")
@@ -634,6 +640,268 @@ async def _stream(base_url: str, api_key: str, model: str,
     except Exception as exc:
         yield f"data: {json.dumps({'error': f'Stream error: {exc}'})}\n\n"
         yield "data: [DONE]\n\n"
+
+
+# ——— eval ———
+# Ensure the local csp_dev/eval/ package is found before the
+# workspace-level eval/ symlink (which points to the old eval code).
+sys.path.insert(0, str(APP_DIR))
+from eval import list_benches as _eval_list_benches  # noqa: E402
+from eval.runner import EvalRunner, create_run_id, list_runs as _eval_list_runs  # noqa: E402
+from eval import leaderboard as _eval_lb  # noqa: E402
+
+# In-memory eval run tracking: run_id -> {"runner": EvalRunner, "status": str}
+_eval_runs: dict[str, dict[str, Any]] = {}
+
+
+class EvalRunRequest(BaseModel):
+    model_keys: list[str]
+    bench_ids: list[str]
+    mode: str = "cot"  # "zero_shot" or "cot"
+    workers: int = 10
+    limit: int = 0
+    no_resume: bool = False
+
+
+@app.get("/api/eval/benches")
+async def eval_list_benches() -> list[dict[str, Any]]:
+    """List all registered evaluation benches with metadata."""
+    benches = []
+    for b in _eval_list_benches():
+        benches.append({
+            "id": b.id,
+            "name": b.name,
+            "language": b.language,
+            "split": b.split,
+            "description": b.description,
+            "data_file": str(b.data_file),
+            "exists": Path(b.data_file).exists(),
+        })
+    return benches
+
+
+@app.post("/api/eval/run")
+async def eval_start_run(req: EvalRunRequest) -> dict[str, Any]:
+    """Start an evaluation run in a background thread."""
+    if not req.model_keys:
+        raise HTTPException(400, "At least one model is required")
+    if not req.bench_ids:
+        raise HTTPException(400, "At least one bench is required")
+    if req.mode not in ("zero_shot", "cot"):
+        raise HTTPException(400, f"Invalid mode: {req.mode}")
+
+    cfg = _cfg()
+    for key in req.model_keys:
+        if key not in cfg.MODELS:
+            raise HTTPException(404, f"Unknown model: {key}")
+        # Refuse to eval a vLLM model that isn't running
+        model_cfg = cfg.MODELS[key]
+        if model_cfg.get("provider", "vllm") != "deepseek":
+            if not _model_is_running(key):
+                raise HTTPException(
+                    503,
+                    f"Model '{key}' is not running. Launch it first.",
+                )
+
+    run_id = create_run_id()
+    runner = EvalRunner(
+        run_id=run_id,
+        model_keys=req.model_keys,
+        bench_ids=req.bench_ids,
+        mode=req.mode,
+        workers=req.workers,
+        limit=req.limit,
+        no_resume=req.no_resume,
+    )
+    _eval_runs[run_id] = {"runner": runner, "status": "running"}
+
+    def _run():
+        try:
+            runner.run()
+            _eval_runs[run_id]["status"] = "completed"
+        except Exception as e:
+            _eval_runs[run_id]["status"] = f"error: {e}"
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+
+    return {"ok": True, "run_id": run_id}
+
+
+@app.get("/api/eval/run/{run_id}/stream")
+async def eval_stream(run_id: str, request: Request):
+    """SSE stream of eval progress events."""
+    entry = _eval_runs.get(run_id)
+    if entry is None:
+        raise HTTPException(404, f"Unknown run: {run_id}")
+    runner: EvalRunner = entry["runner"]
+    q = runner.queue
+
+    async def gen():
+        loop = asyncio.get_running_loop()
+        while True:
+            if await request.is_disconnected():
+                break
+            try:
+                event = await loop.run_in_executor(
+                    _thread_pool, lambda: q.get(timeout=1),
+                )
+            except Empty:
+                if entry["status"] != "running":
+                    break
+                continue
+            except Exception:
+                break
+            if event is None:
+                yield "data: [EOF]\n\n"
+                break
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+@app.post("/api/eval/run/{run_id}/stop")
+async def eval_stop_run(run_id: str):
+    """Signal a running eval to stop."""
+    entry = _eval_runs.get(run_id)
+    if entry is None:
+        raise HTTPException(404, f"Unknown run: {run_id}")
+    runner: EvalRunner = entry["runner"]
+    runner.stop()
+    entry["status"] = "stopped"
+    return {"ok": True, "message": "Stop signal sent"}
+
+
+@app.get("/api/eval/run/{run_id}/progress")
+async def eval_get_progress(run_id: str):
+    """Get current progress snapshot (for restoring UI after refresh)."""
+    entry = _eval_runs.get(run_id)
+    if entry is None:
+        raise HTTPException(404, f"Unknown run: {run_id}")
+    runner: EvalRunner = entry["runner"]
+    return {"run_id": run_id, "progress": runner.get_progress()}
+
+
+@app.get("/api/eval/runs")
+async def eval_list_runs() -> list[dict[str, Any]]:
+    """List all eval runs (from disk + in-memory)."""
+    disk_runs = _eval_list_runs()
+    for run in disk_runs:
+        rid = run.get("run_id", "")
+        if rid in _eval_runs:
+            run["status"] = _eval_runs[rid]["status"]
+        elif "status" not in run:
+            run["status"] = "unknown"
+    disk_ids = {r.get("run_id") for r in disk_runs}
+    for rid, entry in _eval_runs.items():
+        if rid not in disk_ids:
+            # Only show in-memory runs that are still actively running;
+            # skip phantom entries whose output dirs were deleted.
+            if entry["status"] == "running":
+                disk_runs.append({"run_id": rid, "status": entry["status"]})
+            else:
+                _eval_runs.pop(rid, None)
+    disk_runs.sort(key=lambda r: r.get("run_id", ""), reverse=True)
+    return disk_runs
+
+
+@app.get("/api/eval/run/{run_id}")
+async def eval_get_run(run_id: str) -> dict[str, Any]:
+    """Get full details of a specific eval run (config + summary)."""
+    output_dir = Path(__file__).resolve().parent / "eval" / "output" / run_id
+    if not output_dir.exists():
+        entry = _eval_runs.get(run_id)
+        if entry is None:
+            raise HTTPException(404, f"Unknown run: {run_id}")
+        return {"run_id": run_id, "status": entry["status"], "results": []}
+
+    result: dict[str, Any] = {"run_id": run_id}
+    config_file = output_dir / "config.json"
+    if config_file.exists():
+        result["config"] = json.loads(config_file.read_text(encoding="utf-8"))
+    summary_file = output_dir / "summary.json"
+    if summary_file.exists():
+        result["summary"] = json.loads(summary_file.read_text(encoding="utf-8"))
+        result["status"] = "completed"
+    else:
+        entry = _eval_runs.get(run_id)
+        if entry:
+            result["status"] = entry["status"]
+        else:
+            json_files = list(output_dir.glob("*.json"))
+            result["status"] = "interrupted" if json_files else "pending"
+            result["partial_files"] = [f.name for f in json_files]
+
+    detail_files = []
+    for f in sorted(output_dir.glob("*__*.json")):
+        if f.name in ("config.json", "summary.json"):
+            continue
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+            detail_files.append({
+                "file": f.name,
+                "count": len(data) if isinstance(data, list) else 0,
+            })
+        except Exception:
+            pass
+    result["detail_files"] = detail_files
+    return result
+
+
+@app.get("/api/eval/run/{run_id}/detail/{filename}")
+async def eval_get_detail(run_id: str, filename: str):
+    """Get the full per-(model,bench) results JSON for a run."""
+    output_dir = Path(__file__).resolve().parent / "eval" / "output" / run_id
+    safe_name = Path(filename).name
+    detail_file = output_dir / safe_name
+    if not detail_file.exists() or not safe_name.endswith(".json"):
+        raise HTTPException(404, f"File not found: {filename}")
+    return json.loads(detail_file.read_text(encoding="utf-8"))
+
+
+@app.delete("/api/eval/run/{run_id}")
+async def eval_delete_run(run_id: str):
+    """Delete an eval run and its output files."""
+    output_dir = Path(__file__).resolve().parent / "eval" / "output" / run_id
+    safe = Path(run_id).name
+    if safe != run_id:
+        raise HTTPException(404, f"Unknown run: {run_id}")
+    import shutil
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    _eval_runs.pop(run_id, None)
+    return {"ok": True, "run_id": run_id}
+
+
+# -- leaderboard --
+
+@app.get("/api/eval/leaderboard")
+async def eval_leaderboard() -> dict[str, Any]:
+    return _eval_lb.get_leaderboard()
+
+
+@app.post("/api/eval/leaderboard/import/{run_id}")
+async def eval_lb_import(run_id: str) -> dict[str, Any]:
+    output_dir = Path(__file__).resolve().parent / "eval" / "output" / run_id
+    if not output_dir.exists():
+        raise HTTPException(404, f"Unknown run: {run_id}")
+    return _eval_lb.import_run(run_id, output_dir)
+
+
+@app.delete("/api/eval/leaderboard/{entry_id}")
+async def eval_lb_delete(entry_id: str):
+    ok = _eval_lb.delete_entry(entry_id)
+    if not ok:
+        raise HTTPException(404, "Entry not found")
+    return {"ok": True}
+
+
+@app.delete("/api/eval/leaderboard")
+async def eval_lb_clear():
+    n = _eval_lb.clear_all()
+    return {"ok": True, "deleted": n}
+
+
 
 
 # ——— frontend ————

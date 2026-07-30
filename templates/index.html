@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh" data-theme="dark">
+<html lang="zh" data-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -393,6 +393,9 @@ svg.lucide{flex-shrink:0;stroke-width:2}
   font-family:var(--font-mono);font-weight:600;font-variant-numeric:tabular-nums;
 }
 .lora-info{font-size:12px;color:var(--text-dim);line-height:1.8;background:var(--panel-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 11px}
+.switch-row{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.switch-row .switch-text{font-size:13px;color:var(--text);font-weight:600}
+.switch-row .switch-hint{font-size:11px;color:var(--text-mute);font-weight:400;margin-top:3px}
 .log-panel{
   background:var(--code-bg);color:hsl(155,22%,72%);
   font-size:11px;font-family:var(--font-mono);padding:10px 12px;
@@ -423,6 +426,106 @@ svg.lucide{flex-shrink:0;stroke-width:2}
 .theme-toggle .icon-sun{display:none}
 [data-theme="light"] .theme-toggle .icon-sun{display:inline-flex}
 [data-theme="light"] .theme-toggle .icon-moon{display:none}
+
+/* ── Eval view ── */
+.view-tabs{display:flex;gap:2px;padding:4px;background:var(--panel-2);border-bottom:1px solid var(--border)}
+.view-tab{display:inline-flex;align-items:center;gap:6px;padding:5px 14px;border:none;background:transparent;color:var(--text-dim);font-size:12px;font-weight:500;cursor:pointer;border-radius:var(--radius-sm);transition:all var(--t-fast);font-family:var(--font)}
+.view-tab:hover{color:var(--text);background:var(--panel-hover)}
+.view-tab.active{color:var(--accent);background:var(--accent-soft)}
+.view-tab svg.lucide{width:14px;height:14px}
+.view-content{display:none;flex:1;min-height:0;flex-direction:column}
+.view-content.active{display:flex}
+
+.eval-panel{flex:1;overflow-y:auto;padding:16px 20px}
+.eval-section{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px;margin-bottom:14px}
+.eval-section h3{font-size:13px;font-weight:600;color:var(--text);display:flex;align-items:center;gap:8px;margin-bottom:14px}
+.eval-section h3 svg.lucide{width:16px;height:16px;color:var(--accent)}
+
+.eval-config-row{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;margin-bottom:14px}
+.eval-field{display:flex;flex-direction:column;gap:5px}
+.eval-field>label{font-size:11px;color:var(--text-dim);font-weight:500}
+.eval-field select,.eval-field input[type=number]{background:var(--input-bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:5px 8px;color:var(--text);font-size:12px;font-family:var(--font);min-width:80px}
+.eval-field input[type=number]{width:60px}
+
+.mode-toggle{display:inline-flex;background:var(--panel-2);border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden}
+.mode-toggle button{padding:5px 12px;border:none;background:transparent;color:var(--text-dim);font-size:11px;font-weight:500;cursor:pointer;transition:all var(--t-fast);font-family:var(--font)}
+.mode-toggle button.active{background:var(--accent);color:#fff}
+.mode-toggle button:hover:not(.active){color:var(--text)}
+
+.bench-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-bottom:12px}
+.bench-group-header{grid-column:1/-1;display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border);cursor:pointer;user-select:none}
+.bench-group-header:hover{background:var(--panel-hover)}
+.bench-group-header .glabel{font-size:11px;font-weight:600;color:var(--text-dim);flex:1}
+.bench-group-header .chevron{width:14px;height:14px;color:var(--text-mute);transition:transform var(--t);flex-shrink:0}
+.bench-group-header.collapsed .chevron{transform:rotate(-90deg)}
+.bench-group-header .grp-btn{font-size:10px;padding:2px 6px;border:none;background:transparent;color:var(--text-mute);cursor:pointer;border-radius:var(--radius-xs)}
+.bench-group-header .grp-btn:hover{color:var(--accent)}
+.bench-group-body{grid-column:1/-1;display:contents}
+.bench-group-body.hidden{display:none}
+.bench-chip{display:flex;align-items:center;gap:6px;padding:7px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--panel-2);color:var(--text-dim);font-size:12px;cursor:pointer;transition:all var(--t-fast);user-select:none}
+.bench-chip:hover{border-color:var(--border-strong);color:var(--text)}
+.bench-chip.active{border-color:var(--accent);background:var(--accent-soft);color:var(--accent);font-weight:500}
+.bench-chip svg.lucide{width:14px;height:14px;flex-shrink:0}
+.bench-chip .lang-tag{margin-left:auto;font-size:10px;color:var(--text-mute);font-weight:400}
+.bench-chip.active .lang-tag{color:var(--accent)}
+
+.model-dropdown{position:relative}
+.model-check-list{position:absolute;z-index:100;top:100%;left:0;min-width:280px;max-height:300px;overflow-y:auto;border:1px solid var(--border-strong);border-radius:var(--radius);padding:4px;background:var(--panel);box-shadow:var(--shadow-md);margin-top:2px}
+.model-check-item{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:var(--radius-xs);cursor:pointer;transition:background var(--t-fast)}
+.model-check-item:hover{background:var(--panel-hover)}
+.model-check-item input{accent-color:var(--accent)}
+.model-check-item .mc-name{font-size:12px;color:var(--text)}
+.model-check-item .mc-status{margin-left:auto;font-size:10px}
+.model-check-item.running .mc-name{color:var(--green)}
+
+.eval-actions{display:flex;gap:10px;align-items:center;margin-top:8px}
+
+.eval-progress-table{width:100%;border-collapse:collapse;font-size:12px}
+.eval-progress-table th{text-align:left;padding:6px 8px;color:var(--text-dim);font-weight:500;border-bottom:1px solid var(--border);font-size:11px}
+.eval-progress-table td{padding:5px 8px;border-bottom:1px solid var(--border)}
+.eval-progress-table .model-cell{font-weight:500;color:var(--text)}
+.eval-progress-table .bench-cell{color:var(--text-dim)}
+.eval-progress-table .acc-cell{font-family:var(--font-mono);font-weight:600}
+.eval-progress-table .acc-cell.done{color:var(--green)}
+.eval-progress-table .progress-bar{width:120px;height:6px;background:var(--panel-2);border-radius:3px;overflow:hidden;border:1px solid var(--border)}
+.eval-progress-table .progress-fill{height:100%;background:var(--accent);border-radius:3px;transition:width .3s var(--ease)}
+.eval-progress-table .progress-fill.green{background:var(--green)}
+
+.eval-empty{text-align:center;padding:32px;color:var(--text-mute);font-size:13px}
+.eval-empty svg.lucide{width:32px;height:32px;margin-bottom:8px;opacity:.4}
+
+.eval-history-table{width:100%;border-collapse:collapse;font-size:12px}
+.eval-history-table th{text-align:left;padding:6px 8px;color:var(--text-dim);font-weight:500;border-bottom:1px solid var(--border);font-size:11px}
+.eval-history-table td{padding:5px 8px;border-bottom:1px solid var(--border);cursor:pointer}
+.eval-history-table tr:hover td{background:var(--panel-hover)}
+.status-pill{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600}
+.status-pill.running{background:var(--amber-soft);color:var(--amber)}
+.status-pill.completed{background:var(--green-soft);color:var(--green)}
+.status-pill.error{background:var(--red-soft);color:var(--red)}
+.status-pill.interrupted{background:var(--amber-soft);color:var(--amber)}
+
+/* leaderboard */
+.lb-section{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px;margin-bottom:14px}
+.lb-section h3{font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px;margin-bottom:12px}
+.lb-section h3 svg.lucide{width:16px;height:16px;color:var(--accent)}
+.lb-table{width:100%;border-collapse:collapse;font-size:12px}
+.lb-table th{text-align:right;padding:6px 8px;color:var(--text-dim);font-weight:500;border-bottom:2px solid var(--border-strong);font-size:11px;white-space:nowrap;position:sticky;top:0;background:var(--panel)}
+.lb-table th:first-child{text-align:left}
+.lb-table td{text-align:right;padding:4px 8px;border-bottom:1px solid var(--border);font-family:var(--font-mono)}
+.lb-table td:first-child{text-align:left;font-family:var(--font);font-weight:500;white-space:nowrap}
+.lb-table td.best{color:var(--green);font-weight:600}
+.lb-table tr:hover td{background:var(--panel-hover)}
+.lb-actions{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+.import-list{max-height:400px;overflow-y:auto}
+.import-item{display:flex;align-items:center;gap:8px;padding:8px;border-bottom:1px solid var(--border)}
+.import-item .ii-name{flex:1;font-size:12px}
+.import-item .ii-meta{font-size:11px;color:var(--text-dim)}
+
+.eval-detail-modal{max-width:900px}
+.eval-detail-modal .results-grid{display:grid;grid-template-columns:1fr;gap:6px;margin-top:12px}
+.eval-detail-modal .result-row{display:grid;grid-template-columns:2fr 2fr 1fr 1fr 1fr;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px}
+.eval-detail-modal .result-row.head{font-weight:600;color:var(--text-dim);font-size:11px}
+
 </style>
 </head>
 <body>
@@ -438,8 +541,16 @@ svg.lucide{flex-shrink:0;stroke-width:2}
   <div class="side-log" id="sideLog"></div>
 </aside>
 
-<!-- main chat -->
+<!-- main -->
 <main class="main">
+  <div class="view-tabs">
+    <button class="view-tab active" data-view="chat" onclick="switchView('chat')"><i data-lucide="messages-square"></i><span>对话</span></button>
+    <button class="view-tab" data-view="eval" onclick="switchView('eval')"><i data-lucide="clipboard-list"></i><span>测评</span></button>
+    <button class="view-tab" data-view="lb" onclick="switchView('lb')"><i data-lucide="trophy"></i><span>榜单</span></button>
+    <span style="flex:1"></span>
+    <button class="theme-toggle" onclick="toggleTheme()" title="切换主题" aria-label="切换主题"><i data-lucide="moon" class="icon-moon"></i><i data-lucide="sun" class="icon-sun"></i></button>
+  </div>
+  <div class="view-content active" id="viewChat">
   <div class="chat-header">
     <i data-lucide="messages-square" class="chat-title-icon"></i>
     <span class="chat-title">对话</span>
@@ -447,7 +558,6 @@ svg.lucide{flex-shrink:0;stroke-width:2}
     <select id="chatModel"><option value="">-- 选择模型 --</option></select>
     <span class="status-badge" id="chatStatus"></span>
     <button class="btn btn-xs ghost new-chat-btn" id="newChatBtn" onclick="newChat()" title="新建对话" aria-label="新建对话" disabled><i data-lucide="square-pen"></i><span>新对话</span></button>
-    <button class="theme-toggle" onclick="toggleTheme()" title="切换主题" aria-label="切换主题"><i data-lucide="moon" class="icon-moon"></i><i data-lucide="sun" class="icon-sun"></i></button>
   </div>
   <div class="chat-messages" id="chatMessages">
     <div class="empty-state">
@@ -469,6 +579,75 @@ svg.lucide{flex-shrink:0;stroke-width:2}
     <textarea id="chatInput" rows="1" placeholder="输入消息，Enter 发送" onkeydown="handleKey(event)"></textarea>
     <button class="btn primary send-btn" id="sendBtn" onclick="sendMessage()"><i data-lucide="send"></i><span class="btn-label">发送</span></button>
   </div></div>
+  </div><!-- /viewChat -->
+
+  <!-- eval view -->
+  <div class="view-content" id="viewEval">
+    <div class="eval-panel">
+      <div class="eval-section">
+        <h3><i data-lucide="settings-2"></i>测评配置</h3>
+        <div class="eval-config-row">
+          <div class="eval-field model-dropdown">
+            <label>模型</label>
+            <button class="btn" onclick="toggleModelDropdown()" id="evalModelBtn"><i data-lucide="box"></i><span>选择模型</span></button>
+            <div class="model-check-list" id="evalModelList" style="display:none"></div>
+          </div>
+          <div class="eval-field">
+            <label>模式</label>
+            <div class="mode-toggle" id="evalModeToggle">
+              <button class="active" data-mode="cot" onclick="setEvalMode('cot')">CoT</button>
+              <button data-mode="zero_shot" onclick="setEvalMode('zero_shot')">Zero-Shot</button>
+            </div>
+          </div>
+          <div class="eval-field">
+            <label>并发线程</label>
+            <input type="number" id="evalWorkers" value="10" min="1" max="50">
+          </div>
+          <div class="eval-field">
+            <label>限制题数 (0=全部)</label>
+            <input type="number" id="evalLimit" value="0" min="0" max="10000">
+          </div>
+        </div>
+        <div class="eval-config-row">
+          <div class="eval-field" style="flex:1;min-width:100%">
+            <label>选择 Bench <button class="btn btn-xs ghost" onclick="selectAllBenches(true)" style="margin-left:8px">全选</button><button class="btn btn-xs ghost" onclick="selectAllBenches(false)" style="margin-left:4px">清空</button></label>
+            <div class="bench-grid" id="evalBenchGrid"></div>
+          </div>
+        </div>
+        <div class="eval-actions">
+          <button class="btn primary" id="evalRunBtn" onclick="startEval()"><i data-lucide="play"></i>开始测评</button>
+          <button class="btn danger" id="evalStopBtn" onclick="stopEval()" style="display:none"><i data-lucide="square"></i>停止</button>
+          <button class="btn ghost" onclick="loadEvalRuns()"><i data-lucide="refresh-cw"></i>刷新历史</button>
+        </div>
+      </div>
+      <div class="eval-section">
+        <h3><i data-lucide="activity"></i>实时进度</h3>
+        <div id="evalProgress">
+          <div class="eval-empty"><i data-lucide="clipboard-list"></i><div>尚无测评任务</div></div>
+        </div>
+      </div>
+      <div class="eval-section">
+        <h3><i data-lucide="history"></i>历史记录</h3>
+        <div id="evalHistory">
+          <div class="eval-empty"><i data-lucide="history"></i><div>尚无历史记录</div></div>
+        </div>
+      </div>
+    </div>
+ </div>
+  <!-- leaderboard view -->
+  <div class="view-content" id="viewLb">
+    <div class="eval-panel">
+      <div class="eval-section">
+        <h3><i data-lucide="trophy"></i>榜单</h3>
+        <div class="lb-actions">
+          <button class="btn primary" onclick="openImportModal()"><i data-lucide="download"></i>导入历史记录</button>
+          <button class="btn ghost" onclick="loadLeaderboard()"><i data-lucide="refresh-cw"></i>刷新</button>
+          <button class="btn danger" onclick="clearLeaderboard()"><i data-lucide="trash-2"></i>清空</button>
+        </div>
+        <div id="lbContent"><div class="eval-empty"><i data-lucide="trophy"></i><div>尚无榜单数据</div></div></div>
+      </div>
+    </div>
+  </div>
 </main>
 
 <!-- launch dialog -->
@@ -501,6 +680,18 @@ svg.lucide{flex-shrink:0;stroke-width:2}
       <div class="lora-info">
         基模: <span id="loraBaseModel"></span><br>
         适配器: <span id="loraAdapter"></span>
+      </div>
+    </div>
+    <div class="field">
+      <div class="switch-row">
+        <div>
+          <div class="switch-text">Eager 模式 (enforce-eager)</div>
+          <div class="switch-hint">跳过 CUDA graph 编译，启动更快、更省显存，适合快速测试</div>
+        </div>
+        <label class="think-switch">
+          <input type="checkbox" id="launchEager" onchange="this.nextElementSibling.textContent=this.checked?'开':'关'">
+          <span class="switch-label">关</span>
+        </label>
       </div>
     </div>
     <div class="field">
@@ -768,7 +959,7 @@ async function doLaunch(){
   $('launchModal').style.display='none';
   try{
     let r=await fetch('/api/launch/'+launchingKey,{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({gpu:parseInt($('launchGpu').value),gpu_memory_utilization:parseFloat($('launchMem').value),max_model_len:parseInt($('launchMaxLen').value),max_num_seqs:parseInt($('launchMaxSeqs').value),max_lora_rank:parseInt($('launchLoraRank').value)})
+      body:JSON.stringify({gpu:parseInt($('launchGpu').value),gpu_memory_utilization:parseFloat($('launchMem').value),max_model_len:parseInt($('launchMaxLen').value),max_num_seqs:parseInt($('launchMaxSeqs').value),max_lora_rank:parseInt($('launchLoraRank').value),enforce_eager:$('launchEager').checked})
     });
     let d=await r.json();
     if(!d.ok){alert('启动失败: '+JSON.stringify(d));refreshModels();return}
@@ -868,6 +1059,511 @@ $('chatModel').addEventListener('change',async()=>{
 $('chatInput').addEventListener('input',function(){
   this.style.height='auto';this.style.height=Math.min(this.scrollHeight,140)+'px';
 });
+
+/* ── Eval view ── */
+let evalBenches=[], evalModels=[], evalMode='cot', evalRunId=null, evalEventSource=null, evalProgressData={};
+
+function switchView(view){
+  document.querySelectorAll('.view-tab').forEach(t=>t.classList.toggle('active',t.dataset.view===view));
+  document.querySelectorAll('.view-content').forEach(v=>v.classList.remove('active'));
+  if(view==='lb'){$('viewLb').classList.add('active');loadLeaderboard()}
+  else if(view==='eval'){
+    $('viewEval').classList.add('active');
+    if(!evalBenches.length)loadEvalBenches();
+    loadEvalRuns();
+    restoreRunningEval();
+  }else{
+    $('viewChat').classList.add('active');
+  }
+  if(window.lucide)lucide.createIcons();
+}
+
+async function loadEvalBenches(){
+  try{
+    evalBenches=await(await fetch('/api/eval/benches')).json();
+    renderBenchGrid();
+  }catch(e){console.error('loadEvalBenches',e)}
+}
+
+function renderBenchGrid(){
+  const grid=$('evalBenchGrid'); grid.innerHTML='';
+  const groups={'hard':[],'full':[],'s10':[],'subset':[]};
+  evalBenches.forEach(b=>{
+    if(b.split==='test_hard')groups.hard.push(b);
+    else if(b.split==='test')groups.full.push(b);
+    else if(b.split&&b.split.startsWith('sampled10'))groups.s10.push(b);
+    else groups.subset.push(b);
+  });
+  const labels={
+    'hard':'\u5168\u91cf Hard (test_hard, 1251\u9898)',
+    'full':'\u5168\u91cf Test (test, 11636\u9898)',
+    's10':'\u91c7\u6837 10% (EN+\u4e2d\u6587, hard+easy)',
+    'subset':'\u81ea\u5b9a\u4e49\u5b50\u96c6'
+  };
+  for(const[gk,label]of Object.entries(labels)){
+    const items=groups[gk];
+    if(!items.length)continue;
+    // collapsible header with per-group select-all / clear
+    const hdr=document.createElement('div');
+    hdr.className='bench-group-header';
+    hdr.innerHTML='<i data-lucide="chevron-down" class="chevron"></i>'+
+      '<span class="glabel">'+escapeHtml(label)+' ('+items.length+')</span>'+
+      '<button class="grp-btn" onclick="event.stopPropagation();groupSelectBenches(\''+gk+'\',true)">\u5168\u9009</button>'+
+      '<button class="grp-btn" onclick="event.stopPropagation();groupSelectBenches(\''+gk+'\',false)">\u6e05\u7a7a</button>';
+    hdr.onclick=()=>{hdr.classList.toggle('collapsed');body.classList.toggle('hidden')};
+    grid.appendChild(hdr);
+    const body=document.createElement('div');
+    body.className='bench-group-body';
+    body.dataset.group=gk;
+    if(gk==='s10'){
+      // group by dataset: one chip per dataset, selecting runs all 4 variants
+      const byDs={};
+      items.forEach(b=>{
+        const parts=b.id.split('_');
+        const langIdx=parts.findIndex(p=>p==='en'||p==='zh');
+        const ds=parts.slice(0,langIdx).join('_');
+        if(!byDs[ds])byDs[ds]={name:b.name.replace(/\s*\[s10-.*\]\s*/g,'').replace(/\s*\(\u4e2d\u6587\)\s*/g,'').trim(),ids:[]};
+        byDs[ds].ids.push(b.id);
+      });
+      Object.keys(byDs).sort().forEach(ds=>{
+        const info=byDs[ds];
+        const chip=document.createElement('div');
+        chip.className='bench-chip active';
+        chip.dataset.bench=info.ids.join(',');
+        chip.dataset.group=gk;
+        chip.innerHTML='<i data-lucide="check-circle-2"></i><span>'+escapeHtml(info.name)+' [s10]</span><span class="lang-tag">'+info.ids.length+'x</span>';
+        chip.onclick=()=>{chip.classList.toggle('active')};
+        body.appendChild(chip);
+      });
+    }else{
+      items.forEach(b=>{
+        const chip=document.createElement('div');
+        chip.className='bench-chip active';
+        chip.dataset.bench=b.id;
+        chip.dataset.group=gk;
+        chip.innerHTML='<i data-lucide="check-circle-2"></i><span>'+escapeHtml(b.name)+'</span><span class="lang-tag">'+(b.language==='zh'?'ZH':'EN')+'</span>';
+        chip.onclick=()=>{chip.classList.toggle('active')};
+        body.appendChild(chip);
+      });
+    }
+    grid.appendChild(body);
+  }
+  if(window.lucide)lucide.createIcons();
+}
+
+function groupSelectBenches(gk,sel){
+  document.querySelectorAll('#evalBenchGrid .bench-chip[data-group="'+gk+'"]').forEach(c=>{
+    if(sel)c.classList.add('active');else c.classList.remove('active');
+  });
+}
+
+
+function selectAllBenches(sel){
+  document.querySelectorAll('#evalBenchGrid .bench-chip').forEach(c=>{if(sel)c.classList.add('active');else c.classList.remove('active')});
+}
+
+async function toggleModelDropdown(){
+  const list=$('evalModelList');
+  if(list.style.display!=='none'){list.style.display='none';return}
+  list.style.display='block';
+  list.innerHTML='<div style="padding:8px;color:var(--text-mute);font-size:11px">loading...</div>';
+  // close on outside click
+  setTimeout(()=>{
+    const handler=e=>{if(!list.contains(e.target)&&e.target!==$('evalModelBtn')&&!$('evalModelBtn').contains(e.target)){list.style.display='none';document.removeEventListener('click',handler)}};
+    document.addEventListener('click',handler);
+  },0);
+  try{
+    const models=await(await fetch('/api/models')).json();
+    list.innerHTML='';
+    models.forEach(m=>{
+      const item=document.createElement('label');
+      item.className='model-check-item'+(m.running?' running':'');
+      item.innerHTML='<input type="checkbox" value="'+m.key+'"'+(m.running?' checked':'')+'>'+
+        '<span class="mc-name">'+escapeHtml(m.display_name)+'</span>'+
+        '<span class="mc-status" style="color:'+(m.running?'var(--green)':'var(--text-mute)')+'">'+(m.running?'running':(m.provider||''))+'</span>';
+      list.appendChild(item);
+    });
+    updateModelButton();
+    list.querySelectorAll('input').forEach(cb=>cb.addEventListener('change',updateModelButton));
+  }catch(e){list.innerHTML='<div style="padding:8px;color:var(--red)">Failed: '+escapeHtml(e.message)+'</div>'}
+}
+
+function getSelectedModels(){
+  return Array.from(document.querySelectorAll('#evalModelList input:checked')).map(cb=>cb.value);
+}
+
+function getSelectedBenches(){
+  const result=[];
+  document.querySelectorAll('#evalBenchGrid .bench-chip.active').forEach(c=>{
+    c.dataset.bench.split(',').forEach(id=>{if(id)result.push(id)});
+  });
+  return result;
+}
+
+function updateModelButton(){
+  const sel=getSelectedModels();
+  const btn=$('evalModelBtn');
+  btn.querySelector('span').textContent=sel.length?('('+sel.length+') '):'选择模型';
+}
+
+function setEvalMode(mode){
+  evalMode=mode;
+  document.querySelectorAll('#evalModeToggle button').forEach(b=>b.classList.toggle('active',b.dataset.mode===mode));
+}
+
+async function restoreRunningEval(){
+  // Check if there's a running eval -- restore its progress on page refresh
+  try{
+    const runs=await(await fetch('/api/eval/runs')).json();
+    const running=runs.find(r=>r.status==='running'||r.status==='stopped');
+    if(!running)return;
+    const rid=running.run_id;
+    const r=await fetch('/api/eval/run/'+rid+'/progress');
+    if(!r.ok)return;
+    const d=await r.json();
+    const prog=d.progress||{};
+    // Restore progress table
+    const keys=Object.keys(prog);
+    if(!keys.length)return;
+    evalRunId=rid;
+    evalProgressData={};
+    // init table
+    const panel=$('evalProgress');
+    panel.innerHTML='<table class="eval-progress-table"><thead><tr><th>Model</th><th>Bench</th><th>Progress</th><th>Acc</th><th></th></tr></thead><tbody id="evalProgressBody"></tbody></table>';
+    keys.forEach(k=>{
+      evalProgressData[k]=prog[k];
+    });
+    renderEvalProgress();
+    // Reconnect SSE
+    $('evalRunBtn').disabled=true;
+    $('evalStopBtn').style.display='inline-flex';
+    streamEval(rid);
+  }catch(e){console.error('restoreRunningEval',e)}
+}
+
+async function startEval(){
+  const models=getSelectedModels();
+  const benches=getSelectedBenches();
+  if(!models.length){alert('请至少选择一个模型');return}
+  if(!benches.length){alert('请至少选择一个 Bench');return}
+  $('evalRunBtn').disabled=true;
+  $('evalStopBtn').style.display='inline-flex';
+  try{
+    const r=await fetch('/api/eval/run',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({model_keys:models,bench_ids:benches,mode:evalMode,
+        workers:parseInt($('evalWorkers').value)||10,limit:parseInt($('evalLimit').value)||0,
+        no_resume:false})});
+    const d=await r.json();
+    if(!r.ok){
+      let msg=d.detail||JSON.stringify(d);
+      // FastAPI wraps detail in {"detail": "..."}
+      if(typeof d.detail==='string')msg=d.detail;
+      alert('启动失败: '+msg);
+      $('evalRunBtn').disabled=false;
+      $('evalStopBtn').style.display='none';
+      return;
+    }
+    evalRunId=d.run_id;
+    evalProgressData={};
+    streamEval(d.run_id);
+  }catch(e){alert('启动失败: '+e);$('evalRunBtn').disabled=false;$('evalStopBtn').style.display='none'}
+}
+
+async function stopEval(){
+  if(!evalRunId)return;
+  if(!confirm('确定停止当前测评？已完成的题目会保存。'))return;
+  $('evalStopBtn').disabled=true;
+  $('evalStopBtn').querySelector('span')?.remove();
+  $('evalStopBtn').innerHTML='<i data-lucide="loader-2" class="spin"></i>停止中';
+  if(window.lucide)lucide.createIcons();
+  try{await fetch('/api/eval/run/'+evalRunId+'/stop',{method:'POST'})}catch(e){}
+  // Give the runner 3s to flush, then close SSE and reset UI
+  setTimeout(()=>{
+    if(evalEventSource){evalEventSource.close();evalEventSource=null}
+    evalRunId=null;
+    $('evalRunBtn').disabled=false;
+    $('evalStopBtn').style.display='none';
+    $('evalStopBtn').disabled=false;
+    $('evalStopBtn').innerHTML='<i data-lucide="square"></i>停止';
+    if(window.lucide)lucide.createIcons();
+    loadEvalRuns();
+  },3000);
+}
+
+function streamEval(runId){
+  if(evalEventSource)evalEventSource.close();
+  evalEventSource=new EventSource('/api/eval/run/'+runId+'/stream');
+  evalEventSource.onmessage=e=>{
+    if(e.data==='[EOF]'){evalEventSource.close();evalEventSource=null;onEvalDone();return}
+    try{const ev=JSON.parse(e.data);handleEvalEvent(ev)}catch(ex){}
+  };
+  evalEventSource.onerror=()=>{if(evalEventSource){evalEventSource.close();evalEventSource=null}};
+}
+
+function handleEvalEvent(ev){
+  if(ev.type==='start'){
+    renderEvalProgressInit(ev.model_keys,ev.bench_ids);
+  }else if(ev.type==='pair_start'){
+    const key=ev.model_key+'|'+ev.bench_id;
+    if(!evalProgressData[key])evalProgressData[key]={model:ev.model_key,bench:ev.bench_id,done:0,correct:0,accuracy:0,status:'pending'};
+    evalProgressData[key].bench_name=ev.bench_name;
+    evalProgressData[key].total=ev.total;
+    evalProgressData[key].status='running';
+    renderEvalProgress();
+  }else if(ev.type==='progress'){
+    const key=ev.model_key+'|'+ev.bench_id;
+    if(evalProgressData[key]){Object.assign(evalProgressData[key],{done:ev.done,correct:ev.correct,accuracy:ev.accuracy})}
+    renderEvalProgress();
+  }else if(ev.type==='pair_done'){
+    const key=ev.model_key+'|'+ev.bench_id;
+    if(evalProgressData[key]){Object.assign(evalProgressData[key],{correct:ev.correct,accuracy:ev.accuracy,status:ev.aborted?'aborted':'done'})}
+    renderEvalProgress();
+  }else if(ev.type==='error'){
+  }else if(ev.type==='skip'){
+    const key=ev.model_key+'|'+(ev.bench_id||'');
+    evalProgressData[key]={model:ev.model_key,bench:ev.bench_id||'-',total:0,done:0,correct:0,accuracy:0,status:'skipped',reason:ev.reason};
+    renderEvalProgress();
+  }else if(ev.type==='error'){
+    const panel=$('evalProgress');
+    panel.innerHTML='<div style="color:var(--red);padding:8px">Error: '+escapeHtml(ev.message)+'</div>';
+  }else if(ev.type==='done'){
+    evalProgressData._finalResults=ev.results;
+  }
+}
+
+function renderEvalProgressInit(modelKeys,benchIds){
+  const panel=$('evalProgress');
+  panel.innerHTML='<table class="eval-progress-table"><thead><tr><th>Model</th><th>Bench</th><th>Progress</th><th>Acc</th><th></th></tr></thead><tbody id="evalProgressBody"></tbody></table>';
+  const body=$('evalProgressBody');
+  modelKeys.forEach(mk=>{
+    benchIds.forEach(bid=>{
+      const key=mk+'|'+bid;
+      evalProgressData[key]={model:mk,bench:bid,total:0,done:0,correct:0,accuracy:0,status:'pending'};
+    });
+  });
+  renderEvalProgress();
+}
+
+function renderEvalProgress(){
+  const body=$('evalProgressBody');
+  if(!body)return;
+  const rows=Object.entries(evalProgressData).filter(([k,v])=>!k.startsWith('_'));
+  if(!rows.length)return;
+  body.innerHTML=rows.map(([key,p])=>{
+    const pct=p.total?(p.done/p.total*100):0;
+    const accClass=p.status==='done'?' done':'';
+    const statusBadge=p.status==='done'?'<span class="status-pill completed" style="font-size:9px">done</span>':p.status==='skipped'?'<span class="status-pill interrupted" style="font-size:9px">skip</span>':'';
+    return '<tr><td class="model-cell">'+escapeHtml(p.model)+'</td>'+
+      '<td class="bench-cell">'+escapeHtml(p.bench_name||p.bench)+(p.reason?'<br><span style="font-size:10px;color:var(--text-mute)">'+escapeHtml(p.reason)+'</span>':'')+'</td>'+
+      '<td style="min-width:160px"><div style="display:flex;align-items:center;gap:6px"><span style="font-size:11px;font-family:var(--font-mono)">'+p.done+'/'+(p.total||'?')+'</span><div class="progress-bar"><div class="progress-fill'+(p.status==='done'?' green':'')+'" style="width:'+pct+'%"></div></div></div></td>'+
+      '<td class="acc-cell'+accClass+'">'+(p.accuracy||0).toFixed(1)+'%</td>'+
+      '<td>'+statusBadge+'</td></tr>';
+  }).join('');
+}
+
+function onEvalDone(){
+  $('evalRunBtn').disabled=false;
+  $('evalStopBtn').style.display='none';
+  $('evalStopBtn').disabled=false;
+  $('evalStopBtn').innerHTML='<i data-lucide="square"></i>停止';
+  if(window.lucide)lucide.createIcons();
+  loadEvalRuns();
+}
+
+async function deleteRun(runId){
+  if(!confirm('\u5220\u9664\u8fd0\u884c '+runId+' \u53ca\u5176\u6240\u6709\u7ed3\u679c\u6587\u4ef6?'))return;
+  try{await fetch('/api/eval/run/'+runId,{method:'DELETE'});loadEvalRuns()}catch(e){alert('\u5220\u9664\u5931\u8d25: '+e)}
+}
+
+async function loadEvalRuns(){
+  const panel=$('evalHistory');
+  try{
+    const runs=await(await fetch('/api/eval/runs')).json();
+    if(!runs.length){panel.innerHTML='<div class="eval-empty"><i data-lucide="history"></i><div>暂无历史记录</div></div>';if(window.lucide)lucide.createIcons();return}
+    panel.innerHTML='<table class="eval-history-table"><thead><tr><th>Run ID</th><th>Mode</th><th>Models</th><th>Benches</th><th>Status</th><th>Acc</th><th></th></tr></thead><tbody>'+
+      runs.map(r=>{
+        const cfg=r.config||{};
+        const summ=r.summary||{};
+        const results=summ.results||[];
+        const avgAcc=results.length?(results.reduce((s,x)=>s+(x.accuracy||0),0)/results.length).toFixed(1)+'%':'-';
+        const status=r.status||'unknown';
+        const statusClass=status.includes('error')?'error':status==='completed'?'completed':status==='running'?'running':'interrupted';
+        return '<tr onclick="showRunDetail(\''+r.run_id+'\')">'+
+          '<td style="font-family:var(--font-mono);font-size:11px">'+escapeHtml(r.run_id)+'</td>'+
+          '<td>'+escapeHtml(cfg.mode||'-')+'</td>'+
+          '<td style="font-size:11px">'+(cfg.model_keys||[]).length+'</td>'+
+          '<td style="font-size:11px">'+(cfg.bench_ids||[]).length+'</td>'+
+          '<td><span class="status-pill '+statusClass+'">'+escapeHtml(status)+'</span></td>'+
+          '<td style="font-family:var(--font-mono);font-weight:600">'+avgAcc+'</td>'+
+      '<td onclick="event.stopPropagation()"><button class="btn btn-xs danger" onclick="deleteRun(\''+r.run_id+'\')"><i data-lucide="trash-2"></i></button></td></tr>';
+      }).join('')+
+      '</tbody></table>';
+  }catch(e){panel.innerHTML='Failed: '+escapeHtml(e)}
+  if(window.lucide)lucide.createIcons();
+}
+
+async function showRunDetail(runId){
+  try{
+    const r=await(await fetch('/api/eval/run/'+runId)).json();
+    const cfg=r.config||{};
+    const summ=r.summary||{};
+    const results=summ.results||[];
+    let html='<h3><i data-lucide="file-text" class="h3-icon"></i>Run: <span class="modal-name">'+escapeHtml(runId)+'</span></h3>';
+    html+='<div style="font-size:12px;color:var(--text-dim);margin-bottom:8px">Mode: '+escapeHtml(cfg.mode||'-')+' | Models: '+escapeHtml((cfg.model_keys||[]).join(', '))+' | Benches: '+escapeHtml((cfg.bench_ids||[]).join(', '))+'</div>';
+    if(results.length){
+      html+='<div class="result-row head"><span>Model</span><span>Bench</span><span>Done</span><span>Correct</span><span>Accuracy</span></div>';
+      html+=results.map(x=>'<div class="result-row"><span>'+escapeHtml(x.model_key)+'</span><span>'+escapeHtml(x.bench_name||x.bench_id)+'</span><span>'+(x.processed||0)+'/'+'</span><span>'+(x.correct||0)+'</span><span style="font-family:var(--font-mono);font-weight:600;color:var(--green)">'+(x.accuracy||0).toFixed(2)+'%</span></div>').join('');
+    }
+    if(r.detail_files&&r.detail_files.length){
+      html+='<div style="margin-top:12px;font-size:11px;color:var(--text-dim)">Detail files:</div>';
+      html+=r.detail_files.map(f=>'<button class="btn btn-xs ghost" style="margin:4px" onclick="downloadDetail(\''+runId+'\',\''+f.file+'\')"><i data-lucide="download"></i>'+escapeHtml(f.file)+' ('+f.count+')</button>').join('');
+    }
+    showEvalModal(html);
+  }catch(e){alert('Failed: '+e)}
+}
+
+function showEvalModal(html){
+  let m=$('evalModal');
+  if(!m){
+    m=document.createElement('div');m.className='modal-overlay';m.id='evalModal';m.style.display='flex';
+    m.onclick=e=>{if(e.target===m)m.style.display='none'};
+    m.innerHTML='<div class="modal-box eval-detail-modal" onclick="event.stopPropagation()"><div id="evalModalContent"></div><div class="modal-actions"><button class="btn" onclick="document.getElementById(\'evalModal\').style.display=\'none\'"><i data-lucide="x"></i>关闭</button></div></div>';
+    document.body.appendChild(m);
+  }
+  $('evalModalContent').innerHTML=html;
+  m.style.display='flex';
+  if(window.lucide)lucide.createIcons();
+}
+
+function downloadDetail(runId,filename){
+  window.open('/api/eval/run/'+runId+'/detail/'+encodeURIComponent(filename),'_blank');
+}
+
+/* ── Leaderboard ── */
+let lbData=null;
+
+async function loadLeaderboard(){
+  try{
+    lbData=await(await fetch('/api/eval/leaderboard')).json();
+    renderLeaderboard();
+  }catch(e){console.error('loadLeaderboard',e)}
+}
+
+function renderLeaderboard(){
+  const c=$('lbContent');
+  const cats=lbData.categories||{};
+  const entries=lbData.entries||{};
+  let html='';
+  let hasData=false;
+  for(const[ck,label]of Object.entries(cats)){
+    const items=entries[ck]||[];
+    if(!items.length)continue;
+    hasData=true;
+    const models=[...new Set(items.map(e=>e.model_key))];
+    const benches=[...new Set(items.map(e=>e.bench_id+':'+e.bench_name))];
+    // per-model avg
+    const modelAvgs={};
+    models.forEach(mk=>{
+      const accs=items.filter(e=>e.model_key===mk).map(e=>e.accuracy||0);
+      modelAvgs[mk]=accs.length?(accs.reduce((a,b)=>a+b,0)/accs.length):0;
+    });
+    models.sort((a,b)=>modelAvgs[b]-modelAvgs[a]);
+    // per-bench best across ALL models (for bold highlighting)
+    const benchBest={};
+    benches.forEach(b=>{
+      const bid=b.split(':')[0];
+      const all=items.filter(e=>e.bench_id===bid).map(e=>e.accuracy||0);
+      benchBest[bid]=all.length?Math.max(...all):0;
+    });
+    html+='<div class="lb-section"><h3><i data-lucide="trophy"></i>'+escapeHtml(label)+' ('+models.length+' 模型, '+benches.length+' bench)</h3>';
+    html+='<div style="overflow-x:auto"><table class="lb-table"><thead><tr><th>模型</th><th>Avg</th>';
+    benches.forEach(b=>{
+      const[name,id]=b.split(':');
+      html+='<th title="'+escapeHtml(id)+'">'+escapeHtml(name)+'</th>';
+    });
+    html+='<th></th></tr></thead><tbody>';
+    models.forEach(mk=>{
+      const mc=items.find(e=>e.model_key===mk);
+      const modelLabel=mc?mc.model_name:mk;
+      html+='<tr><td>'+escapeHtml(modelLabel)+'</td>';
+      html+='<td><b>'+(modelAvgs[mk]||0).toFixed(1)+'%</b></td>';
+      benches.forEach(b=>{
+        const bid=b.split(':')[0];
+        const e=items.find(x=>x.model_key===mk&&x.bench_id===bid);
+        if(e){
+          const isBest=(e.accuracy||0)===benchBest[bid]&&e.accuracy>0;
+          html+='<td'+(isBest?' class="best"':'')+'>'+(e.accuracy||0).toFixed(1)+'%</td>';
+        }else{
+          html+='<td>-</td>';
+        }
+      });
+      html+='<td><button class="btn btn-xs danger" onclick="deleteLbEntries(\''+ck+'\',\''+mk+'\')"><i data-lucide="trash-2"></i></button></td>';
+      html+='</tr>';
+    });
+    html+='</tbody></table></div></div>';
+  }
+  if(!hasData){
+    c.innerHTML='<div class="eval-empty"><i data-lucide="trophy"></i><div>尚无榜单数据，点“导入历史记录”</div></div>';
+  }else{
+    c.innerHTML=html;
+  }
+  if(window.lucide)lucide.createIcons();
+}
+
+async function openImportModal(){
+  try{
+    const runs=await(await fetch('/api/eval/runs')).json();
+    const completed=runs.filter(r=>r.status==='completed'||r.summary);
+    if(!completed.length){alert('没有完成的运行可导入');return}
+    let html='<div class="import-list">';
+    completed.forEach(r=>{
+      const cfg=r.config||{};
+      const summ=r.summary||{};
+      const results=summ.results||[];
+      const avgAcc=results.length?(results.reduce((s,x)=>s+(x.accuracy||0),0)/results.length).toFixed(1)+'%':'-';
+      html+='<div class="import-item">'+
+        '<div class="ii-name">'+escapeHtml(r.run_id)+'<br><span class="ii-meta">'+escapeHtml(cfg.mode||'')+' | '+(cfg.model_keys||[]).length+'模型 | '+(cfg.bench_ids||[]).length+'bench | '+avgAcc+'</span></div>'+
+        '<button class="btn btn-xs primary" onclick="importRun(\''+r.run_id+'\')"><i data-lucide="download"></i>导入</button>'+
+        '</div>';
+    });
+    html+='</div>';
+    showEvalModal('<h3><i data-lucide="download" class="h3-icon"></i>导入历史记录到榜单</h3>'+html);
+  }catch(e){alert('Failed: '+e)}
+}
+
+async function importRun(runId){
+  try{
+    const r=await fetch('/api/eval/leaderboard/import/'+runId,{method:'POST'});
+    const d=await r.json();
+    if(d.ok){
+      alert('导入成功: +'+d.imported+' 新, 替换 '+d.replaced+' 条');
+      loadLeaderboard();
+      // close modal
+      const m=$('evalModal');if(m)m.style.display='none';
+    }else{
+      alert('导入失败: '+(d.error||JSON.stringify(d)));
+    }
+  }catch(e){alert('Failed: '+e)}
+}
+
+async function deleteLbEntries(category,modelKey){
+  if(!confirm('删除 '+modelKey+' 在此分榜的所有记录?'))return;
+  try{
+    const data=lbData.entries[category]||[];
+    for(const e of data){
+      if(e.model_key===modelKey){
+        await fetch('/api/eval/leaderboard/'+e.id,{method:'DELETE'});
+      }
+    }
+    loadLeaderboard();
+  }catch(e){alert('Failed: '+e)}
+}
+
+async function clearLeaderboard(){
+  if(!confirm('清空所有榜单数据?'))return;
+  await fetch('/api/eval/leaderboard',{method:'DELETE'});
+  loadLeaderboard();
+}
 
 /* ── Init ── */
 if(window.lucide)lucide.createIcons();
