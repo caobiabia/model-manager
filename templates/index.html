@@ -1214,7 +1214,7 @@ function renderBenchGrid(){
     hdr.innerHTML='<i data-lucide="chevron-down" class="g-chev"></i>'+
       '<span class="g-icon"><i data-lucide="'+g.icon+'"></i></span>'+
       '<span class="g-name">'+escapeHtml(g.name)+'</span>'+
-      '<span class="g-count">'+items.length+'</span>'+
+      '<span class="g-count" title="已选 0 / 共 '+items.length+'">0/'+items.length+'</span>'+
       '<span class="g-meta">'+escapeHtml(g.meta)+'</span>'+
       '<button class="g-btn" onclick="event.stopPropagation();groupSelectBenches(\''+g.key+'\',true)">全选</button>'+
       '<button class="g-btn" onclick="event.stopPropagation();groupSelectBenches(\''+g.key+'\',false)">清空</button>';
@@ -1336,6 +1336,13 @@ function updateBenchSummary(){
   document.querySelectorAll('#evalBenchGrid .bench-group').forEach(g=>{
     const cards=Array.from(g.querySelectorAll('.bench-card:not(.unavailable)'));
     g.classList.toggle('has-selected',cards.some(c=>c.classList.contains('active')));
+    const cnt=g.querySelector('.g-count');
+    if(cnt){
+      const groupSel=g.querySelectorAll('.bench-card.active').length;
+      const groupTotal=g.querySelectorAll('.bench-card').length;
+      cnt.textContent=groupSel+'/'+groupTotal;
+      cnt.title='已选 '+groupSel+' / 共 '+groupTotal;
+    }
   });
 }
 
