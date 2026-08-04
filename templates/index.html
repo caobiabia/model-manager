@@ -879,7 +879,7 @@ svg.lucide{flex-shrink:0;stroke-width:2}
     <h3><i data-lucide="rocket" class="h3-icon"></i>启动: <span class="modal-name" id="launchModelName"></span></h3>
     <div class="field">
       <label>GPU 编号</label>
-      <select id="launchGpu"></select>
+      <select id="launchGpu" onchange="onLaunchGpuChange()"></select>
     </div>
     <div class="field">
       <label>显存占用 (gpu-memory-utilization)</label>
@@ -888,11 +888,11 @@ svg.lucide{flex-shrink:0;stroke-width:2}
     </div>
     <div class="field">
       <label>最大长度 (max-model-len)</label>
-      <input type="number" id="launchMaxLen" value="12000" step="1000" min="1000" max="65536">
+      <input type="number" id="launchMaxLen" value="16384" step="1000" min="1000" max="65536">
     </div>
     <div class="field">
       <label>最大并发 (max-num-seqs)</label>
-      <input type="number" id="launchMaxSeqs" value="256" step="16" min="16" max="2048">
+      <input type="number" id="launchMaxSeqs" value="1024" step="16" min="16" max="2048">
     </div>
     <div class="field" id="loraRankField" style="display:none">
       <label>LoRA 最大秩 (max-lora-rank)</label>
@@ -1022,6 +1022,17 @@ function populateLaunchGpu(){
   if(!good||(sel.selectedOptions[0]&&sel.selectedOptions[0].disabled)){
     sel.value=good?good.value:'';
   }
+}
+function onLaunchGpuChange(){
+  const sel=$('launchGpu');
+  if(!sel||sel.value==='')return;
+  const g=gpusCache.find(x=>x.index===parseInt(sel.value,10));
+  if(!g||!g.total_mb)return;
+  const free=g.free_mb||0;
+  const ratio=Math.min(0.95,Math.max(0.2,0.95*free/g.total_mb));
+  const mem=$('launchMem');
+  mem.value=ratio.toFixed(2);
+  $('launchMemVal').textContent=ratio.toFixed(2);
 }
 function toggleGpuSelect(idx){
   selectedGpu=(selectedGpu===idx)?null:idx;
@@ -1369,6 +1380,7 @@ async function openLaunch(key,name){
     $('launchLog').textContent='所有 GPU 剩余显存不足，请先释放显存';
   }
   $('launchModal').style.display='flex';
+  onLaunchGpuChange();
   // Fetch model info to detect LoRA config
   try{
     let models=await(await fetch('/api/models')).json();

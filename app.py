@@ -260,7 +260,7 @@ class LaunchRequest(BaseModel):
     gpu: int | None = None
     gpu_memory_utilization: float = 0.8
     max_model_len: int | None = None
-    max_num_seqs: int = 256
+    max_num_seqs: int = 1024
     max_lora_rank: int = 64
     enforce_eager: bool = False
 
@@ -518,7 +518,7 @@ async def launch_model(model_key: str, body: LaunchRequest = LaunchRequest()):
             gpu_warning = f"GPU {gpu} has running processes: {procs_str}"
 
         # Build CLI from config (not hardcoded flags!)
-        default_ml = cfg.get("vllm_args", {}).get("max-model-len", 12000)
+        default_ml = cfg.get("vllm_args", {}).get("max-model-len", 16384)
         max_len = body.max_model_len or default_ml
 
         cmd = _build_vllm_cmd(
