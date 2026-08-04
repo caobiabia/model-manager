@@ -2083,7 +2083,7 @@ document.addEventListener('click',e=>{
   selectedGpu=null;
   renderGpus();
   refreshModels();
-});
+},true);
 refreshModels();loadGpus();setInterval(refreshModels,15000);setInterval(loadGpus,30000);setInterval(refreshEvalRunStatuses,5000);
 </script>
 </body>
