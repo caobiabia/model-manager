@@ -556,6 +556,12 @@ svg.lucide{flex-shrink:0;stroke-width:2}
 .eval-progress-table .progress-bar{width:120px;height:6px;background:var(--panel-2);border-radius:3px;overflow:hidden;border:1px solid var(--border)}
 .eval-progress-table .progress-fill{height:100%;background:var(--accent);border-radius:3px;transition:width .3s var(--ease)}
 .eval-progress-table .progress-fill.green{background:var(--green)}
+.eval-run-list{display:flex;flex-direction:column;gap:8px;margin-bottom:12px}
+.eval-run-item{display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--panel-2)}
+.eval-run-item.active{border-color:var(--accent);background:var(--accent-soft)}
+.eval-run-item .run-id{font-family:var(--font-mono);font-size:11px;color:var(--text);font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.eval-run-item .run-summary{font-size:11px;color:var(--text-dim);white-space:nowrap}
+.eval-run-item .btn{flex-shrink:0}
 
 .eval-empty{text-align:center;padding:32px;color:var(--text-mute);font-size:13px}
 .eval-empty svg.lucide{width:32px;height:32px;margin-bottom:8px;opacity:.4}
@@ -699,7 +705,10 @@ svg.lucide{flex-shrink:0;stroke-width:2}
       <div class="eval-section">
         <h3><i data-lucide="activity"></i>实时进度</h3>
         <div id="evalProgress">
-          <div class="eval-empty"><i data-lucide="clipboard-list"></i><div>尚无测评任务</div></div>
+          <div class="eval-run-list" id="runningEvalList"></div>
+          <div id="evalProgressDetail">
+            <div class="eval-empty"><i data-lucide="clipboard-list"></i><div>尚无测评任务</div></div>
+          </div>
         </div>
       </div>
       <div class="eval-section">
@@ -1140,7 +1149,9 @@ $('chatInput').addEventListener('input',function(){
 });
 
 /* ── Eval view ── */
-let evalBenches=[], evalModels=[], evalMode='cot', evalRunId=null, evalEventSource=null, evalProgressData={};
+let evalBenches=[], evalMode='cot', evalModelNames={};
+let evalRuns={};  // runId -> {run_id,status,mode,modelKeys,benchIds,progressData,eventSource,error}
+let activeEvalRunId=null;
 
 function switchView(view){
   document.querySelectorAll('.view-tab').forEach(t=>t.classList.toggle('active',t.dataset.view===view));
@@ -1150,7 +1161,7 @@ function switchView(view){
     $('viewEval').classList.add('active');
     if(!evalBenches.length)loadEvalBenches();
     loadEvalRuns();
-    restoreRunningEval();
+    restoreRunningEvals();
   }else{
     $('viewChat').classList.add('active');
   }
@@ -1413,49 +1424,288 @@ function setEvalMode(mode){
   document.querySelectorAll('#evalModeToggle button').forEach(b=>b.classList.toggle('active',b.dataset.mode===mode));
 }
 
-async function restoreRunningEval(){
-  try{
-    const runs=await(await fetch('/api/eval/runs')).json();
-    // Find a running or interrupted run
-    const target=runs.find(r=>r.status==='running'||r.status==='stopped'||r.status==='interrupted');
-    if(!target)return;
-    const rid=target.run_id;
-    const r=await fetch('/api/eval/run/'+rid+'/progress');
-    if(!r.ok)return;
-    const d=await r.json();
-    const prog=d.progress||{};
-    const keys=Object.keys(prog);
-    if(!keys.length)return;
-    evalRunId=rid;
-    evalProgressData={};
-    const panel=$('evalProgress');
-    const isActive=target.status==='running'||target.status==='stopped';
-    // For interrupted runs, add a resume button in the progress header
-    let headerHtml='<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">';
-    headerHtml+='<span style="font-size:12px;color:var(--text-dim)">'+(isActive?'\u8fd0\u884c\u4e2d':'\u5df2\u4e2d\u65ad')+'</span>';
-    if(!isActive){
-      headerHtml+='<button class="btn btn-xs primary" onclick="resumeRun(\''+rid+'\')"><i data-lucide="play"></i>\u7ee7\u7eed\u8fd0\u884c</button>';
-    }
-    headerHtml+='</div>';
-    panel.innerHTML=headerHtml+'<table class="eval-progress-table"><thead><tr><th>Model</th><th>Bench</th><th>Progress</th><th>Acc</th><th></th></tr></thead><tbody id="evalProgressBody"></tbody></table>';
-    keys.forEach(k=>{evalProgressData[k]=prog[k]});
-    renderEvalProgress();
-    if(isActive){
-      $('evalRunBtn').disabled=true;
-      $('evalStopBtn').style.display='inline-flex';
-      streamEval(rid);
-    }
-    if(window.lucide)lucide.createIcons();
-  }catch(e){console.error('restoreRunningEval',e)}
+function evalStatusLabel(st){
+  if(st==='running')return '运行中';
+  if(st==='stopped')return '已停止';
+  if(st==='interrupted')return '已中断';
+  if(st==='completed')return '已完成';
+  if(st==='error')return '出错';
+  return st||'未知';
 }
-
+function evalStatusClass(st){
+  if(st==='running')return 'running';
+  if(st==='completed')return 'completed';
+  return 'interrupted';
+}
+function createEvalRun(rid,status,cfg){
+  const run={
+    run_id:rid,
+    status:status||'running',
+    mode:(cfg&&cfg.mode)||'',
+    modelKeys:(cfg&&cfg.model_keys)||[],
+    benchIds:(cfg&&cfg.bench_ids)||[],
+    progressData:{},
+    eventSource:null,
+    error:null
+  };
+  evalRuns[rid]=run;
+  return run;
+}
+function benchNameOf(id){
+  if(!id)return null;
+  const hit=evalBenches.find(b=>b.id===id);
+  return hit?hit.name:null;
+}
+async function ensureEvalMeta(){
+  if(!evalBenches.length){try{await loadEvalBenches()}catch(e){}}
+  if(!Object.keys(evalModelNames).length){
+    try{
+      const models=await(await fetch('/api/models')).json();
+      models.forEach(m=>evalModelNames[m.key]=m.display_name);
+    }catch(e){}
+  }
+}
+function renderEvalProgressEmpty(){
+  activeEvalRunId=null;
+  const panel=$('evalProgressDetail');
+  if(panel)panel.innerHTML='<div class="eval-empty"><i data-lucide="clipboard-list"></i><div>尚无测评任务</div></div>';
+  if(window.lucide)lucide.createIcons();
+}
+async function restoreRunningEvals(){
+  try{
+    await ensureEvalMeta();
+    const runs=await(await fetch('/api/eval/runs')).json();
+    const targets=runs.filter(r=>r.status==='running'||r.status==='stopped'||r.status==='interrupted');
+    for(const t of targets){
+      if(evalRuns[t.run_id])continue;
+      let cfg={};
+      try{
+        const rd=await(await fetch('/api/eval/run/'+t.run_id)).json();
+        cfg=rd.config||{};
+      }catch(e){}
+      const run=createEvalRun(t.run_id,t.status,cfg);
+      try{
+        const pr=await(await fetch('/api/eval/run/'+t.run_id+'/progress')).json();
+        Object.assign(run.progressData,pr.progress||{});
+      }catch(e){}
+      if(t.status==='running')streamEval(run.run_id);
+    }
+    renderRunningEvalList();
+    const first=Object.values(evalRuns)[0];
+    if(first)await showEvalRun(first.run_id);
+    else renderEvalProgressEmpty();
+  }catch(e){console.error('restoreRunningEvals',e)}
+}
+function updateRunSummary(runId){
+  const run=evalRuns[runId];
+  const el=document.getElementById('run-row-'+runId);
+  if(!run||!el)return;
+  const entries=Object.entries(run.progressData).filter(([k])=>!k.startsWith('_')).map(([,v])=>v);
+  const done=entries.reduce((s,p)=>s+(Number(p.done)||0),0);
+  const total=entries.reduce((s,p)=>s+(Number(p.total)||0),0);
+  const donePairs=entries.filter(p=>p.status==='done'||(p.total>0&&p.done>=p.total)).length;
+  const totalPairs=(run.modelKeys.length*run.benchIds.length)||entries.length;
+  const parts=[];
+  if(run.modelKeys.length)parts.push(run.modelKeys.length+' 模型');
+  if(run.benchIds.length)parts.push(run.benchIds.length+' Bench');
+  parts.push('完成 '+donePairs+'/'+totalPairs);
+  if(total)parts.push(done+'/'+total+' 题');
+  const sum=el.querySelector('.run-summary');
+  if(sum)sum.textContent=parts.join(' · ');
+}
+function renderRunningEvalList(){
+  const list=$('runningEvalList');
+  if(!list)return;
+  const runs=Object.values(evalRuns);
+  list.innerHTML=runs.map(r=>{
+    const active=r.run_id===activeEvalRunId;
+    return '<div class="eval-run-item'+(active?' active':'')+'" id="run-row-'+r.run_id+'">'+
+      '<span class="status-pill '+evalStatusClass(r.status)+'" style="flex-shrink:0">'+evalStatusLabel(r.status)+'</span>'+
+      '<span class="run-id">'+escapeHtml(r.run_id)+'</span>'+
+      '<span class="run-summary"></span>'+
+      '<button class="btn btn-xs primary" onclick="showEvalRun(\''+r.run_id+'\')"><i data-lucide="eye"></i>查看进度</button>'+
+    '</div>';
+  }).join('');
+  Object.keys(evalRuns).forEach(updateRunSummary);
+  if(window.lucide)lucide.createIcons();
+}
+async function showEvalRun(runId){
+  let run=evalRuns[runId];
+  if(!run){
+    run=createEvalRun(runId,'unknown',{});
+    try{
+      const rd=await(await fetch('/api/eval/run/'+runId)).json();
+      run.mode=rd.config?.mode||run.mode;
+      run.modelKeys=rd.config?.model_keys||[];
+      run.benchIds=rd.config?.bench_ids||[];
+      run.status=rd.status||run.status;
+    }catch(e){}
+    try{
+      const pr=await(await fetch('/api/eval/run/'+runId+'/progress')).json();
+      Object.assign(run.progressData,pr.progress||{});
+    }catch(e){}
+  }
+  activeEvalRunId=runId;
+  renderRunningEvalList();
+  renderEvalProgress(runId);
+  $('evalStopBtn').style.display=(run.status==='running')?'inline-flex':'none';
+}
+function renderEvalProgress(runId){
+  const panel=$('evalProgressDetail');
+  if(!panel)return;
+  const run=evalRuns[runId];
+  if(!run){renderEvalProgressEmpty();return}
+  const entries=Object.entries(run.progressData).filter(([k])=>!k.startsWith('_'));
+  if(!entries.length){
+    panel.innerHTML='<div class="eval-empty"><i data-lucide="loader-2" class="spin"></i><div>等待任务启动...</div></div>';
+    if(window.lucide)lucide.createIcons();
+    return;
+  }
+  let header='<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">';
+  header+='<span class="status-pill '+evalStatusClass(run.status)+'">'+evalStatusLabel(run.status)+'</span>';
+  header+='<span style="font-family:var(--font-mono);font-size:11px;font-weight:600">'+escapeHtml(runId)+'</span>';
+  if(run.mode)header+='<span style="font-size:11px;color:var(--text-dim)">'+escapeHtml(run.mode)+'</span>';
+  if(run.modelKeys.length||run.benchIds.length)header+='<span style="font-size:11px;color:var(--text-dim)">'+run.modelKeys.length+' 模型 · '+run.benchIds.length+' Bench</span>';
+  if(run.error)header+='<span style="color:var(--red);font-size:11px">'+escapeHtml(run.error)+'</span>';
+  if(run.status==='interrupted'||run.status==='stopped'){
+    header+='<button class="btn btn-xs primary" onclick="resumeRun(\''+runId+'\')"><i data-lucide="play"></i>继续运行</button>';
+  }
+  header+='</div>';
+  const rows=entries.map(([,p])=>{
+    const pct=p.total?(p.done/p.total*100):0;
+    const accClass=p.status==='done'?' done':'';
+    const accTxt=(p.accuracy==null||isNaN(p.accuracy))?'\u2014':p.accuracy.toFixed(1)+'%';
+    const modelLabel=evalModelNames[p.model_key||p.model]||p.model||'-';
+    const benchLabel=p.bench_name||benchNameOf(p.bench_id||p.bench)||p.bench_id||p.bench||'-';
+    const statusBadge=p.status==='done'?'<span class="status-pill completed" style="font-size:9px">done</span>':p.status==='skipped'?'<span class="status-pill interrupted" style="font-size:9px">skip</span>':'';
+    return '<tr><td class="model-cell">'+escapeHtml(modelLabel)+'</td>'+
+      '<td class="bench-cell">'+escapeHtml(benchLabel)+(p.reason?'<br><span style="font-size:10px;color:var(--text-mute)">'+escapeHtml(p.reason)+'</span>':'')+'</td>'+
+      '<td style="min-width:160px"><div style="display:flex;align-items:center;gap:6px"><span style="font-size:11px;font-family:var(--font-mono)">'+p.done+'/'+(p.total||'?')+'</span><div class="progress-bar"><div class="progress-fill'+(p.status==='done'?' green':'')+'" style="width:'+pct+'%"></div></div></div></td>'+
+      '<td class="acc-cell'+accClass+'">'+accTxt+'</td>'+
+      '<td>'+statusBadge+'</td></tr>';
+  }).join('');
+  panel.innerHTML=header+'<table class="eval-progress-table"><thead><tr><th>模型</th><th>Bench</th><th>进度</th><th>准确率</th><th></th></tr></thead><tbody id="evalProgressBody">'+rows+'</tbody></table>';
+  if(window.lucide)lucide.createIcons();
+}
+function streamEval(runId){
+  const run=evalRuns[runId];
+  if(!run)return;
+  if(run.eventSource){run.eventSource.close();run.eventSource=null}
+  const es=new EventSource('/api/eval/run/'+runId+'/stream');
+  run.eventSource=es;
+  es.onmessage=e=>{
+    if(e.data==='[EOF]'){es.close();if(run.eventSource===es)run.eventSource=null;onEvalDone(runId);return}
+    try{const ev=JSON.parse(e.data);handleEvalEvent(runId,ev)}catch(ex){}
+  };
+  es.onerror=()=>{if(run.eventSource===es){run.eventSource=null;es.close()}};
+}
+function handleEvalEvent(runId,ev){
+  const run=evalRuns[runId];
+  if(!run)return;
+  if(ev.type==='start'){
+    if(ev.mode)run.mode=ev.mode;
+    if(ev.model_keys)run.modelKeys=ev.model_keys;
+    if(ev.bench_ids)run.benchIds=ev.bench_ids;
+    renderEvalProgressInit(runId,ev.model_keys||[],ev.bench_ids||[]);
+  }else if(ev.type==='model_start'){
+    if(ev.model_name)evalModelNames[ev.model_key]=ev.model_name;
+  }else if(ev.type==='pair_start'){
+    const key=ev.model_key+'|'+ev.bench_id;
+    if(!run.progressData[key])run.progressData[key]={};
+    Object.assign(run.progressData[key],{
+      model:ev.model_key,model_key:ev.model_key,bench_id:ev.bench_id,
+      bench_name:ev.bench_name,total:ev.total,
+      done:Math.max(ev.done||0,run.progressData[key].done||0),
+      correct:0,accuracy:0,status:'running'
+    });
+  }else if(ev.type==='progress'){
+    const key=ev.model_key+'|'+ev.bench_id;
+    if(run.progressData[key]){
+      run.progressData[key].done=Math.max(ev.done||0,run.progressData[key].done||0);
+      run.progressData[key].correct=ev.correct;
+      run.progressData[key].accuracy=ev.accuracy;
+    }
+  }else if(ev.type==='pair_done'){
+    const key=ev.model_key+'|'+ev.bench_id;
+    if(run.progressData[key]){
+      Object.assign(run.progressData[key],{
+        done:Math.max(ev.processed||0,run.progressData[key].done||0),
+        correct:ev.correct,accuracy:ev.accuracy,
+        bench_name:ev.bench_name||run.progressData[key].bench_name,
+        status:ev.aborted?'aborted':'done'
+      });
+    }
+  }else if(ev.type==='skip'){
+    const key=ev.model_key+'|'+(ev.bench_id||'');
+    run.progressData[key]={model:ev.model_key,model_key:ev.model_key,bench_id:ev.bench_id||'-',bench_name:ev.bench_name,total:0,done:0,correct:0,accuracy:0,status:'skipped',reason:ev.reason};
+  }else if(ev.type==='error'){
+    run.error=ev.message;
+    run.status='error';
+  }else if(ev.type==='done'){
+    run.progressData._finalResults=ev.results;
+  }
+  updateRunSummary(runId);
+  if(activeEvalRunId===runId)renderEvalProgress(runId);
+}
+function renderEvalProgressInit(runId,modelKeys,benchIds){
+  const run=evalRuns[runId];
+  if(!run)return;
+  modelKeys.forEach(mk=>{
+    benchIds.forEach(bid=>{
+      const key=mk+'|'+bid;
+      if(!run.progressData[key])run.progressData[key]={model:mk,model_key:mk,bench_id:bid,total:0,done:0,correct:0,accuracy:0,status:'pending'};
+    });
+  });
+  updateRunSummary(runId);
+  if(activeEvalRunId===runId)renderEvalProgress(runId);
+}
+function onEvalDone(runId){
+  const run=evalRuns[runId];
+  if(!run)return;
+  if(run.status==='running')run.status='completed';
+  if(run.status==='completed'){
+    delete evalRuns[runId];
+    if(activeEvalRunId===runId){
+      const first=Object.values(evalRuns)[0];
+      if(first)showEvalRun(first.run_id);
+      else renderEvalProgressEmpty();
+    }else{
+      renderRunningEvalList();
+    }
+  }else{
+    renderRunningEvalList();
+    if(activeEvalRunId===runId)renderEvalProgress(runId);
+  }
+  loadEvalRuns();
+}
+async function resumeRun(runId){
+  if(!confirm('\u7ee7\u7eed\u8fd0\u884c '+runId+'? \u5c06\u8df3\u8fc7\u5df2\u5b8c\u6210\u7684\u9898\u76ee\uff0c\u4ece\u65ad\u70b9\u7ee7\u7eed\u3002'))return;
+  try{
+    let cfg={};
+    try{
+      const rd=await(await fetch('/api/eval/run/'+runId)).json();
+      cfg=rd.config||{};
+    }catch(e){}
+    const r=await fetch('/api/eval/run/'+runId+'/resume',{method:'POST'});
+    const d=await r.json();
+    if(!r.ok){alert('\u7ee7\u7eed\u5931\u8d25: '+(d.detail||JSON.stringify(d)));return}
+    let run=evalRuns[runId];
+    if(!run)run=createEvalRun(runId,'running',cfg);
+    run.status='running';
+    if(cfg.mode)run.mode=cfg.mode;
+    if(cfg.model_keys)run.modelKeys=cfg.model_keys;
+    if(cfg.bench_ids)run.benchIds=cfg.bench_ids;
+    renderRunningEvalList();
+    await showEvalRun(runId);
+    streamEval(runId);
+    loadEvalRuns();
+  }catch(e){alert('Failed: '+e)}
+}
 async function startEval(){
   const models=getSelectedModels();
   const benches=getSelectedBenches();
   if(!models.length){alert('请至少选择一个模型');return}
   if(!benches.length){alert('请至少选择一个 Bench');return}
-  $('evalRunBtn').disabled=true;
-  $('evalStopBtn').style.display='inline-flex';
   try{
     const r=await fetch('/api/eval/run',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({model_keys:models,bench_ids:benches,mode:evalMode,
@@ -1464,157 +1714,49 @@ async function startEval(){
     const d=await r.json();
     if(!r.ok){
       let msg=d.detail||JSON.stringify(d);
-      // FastAPI wraps detail in {"detail": "..."}
       if(typeof d.detail==='string')msg=d.detail;
       alert('启动失败: '+msg);
-      $('evalRunBtn').disabled=false;
-      $('evalStopBtn').style.display='none';
       return;
     }
-    evalRunId=d.run_id;
-    evalProgressData={};
+    createEvalRun(d.run_id,'running',{mode:evalMode,model_keys:models,bench_ids:benches});
+    renderRunningEvalList();
+    await showEvalRun(d.run_id);
     streamEval(d.run_id);
-  }catch(e){alert('启动失败: '+e);$('evalRunBtn').disabled=false;$('evalStopBtn').style.display='none'}
+    loadEvalRuns();
+  }catch(e){alert('启动失败: '+e)}
 }
-
 async function stopEval(){
-  if(!evalRunId)return;
+  const rid=activeEvalRunId;
+  const run=rid?evalRuns[rid]:null;
+  if(!run||run.status!=='running')return;
   if(!confirm('确定停止当前测评？已完成的题目会保存。'))return;
   $('evalStopBtn').disabled=true;
-  $('evalStopBtn').querySelector('span')?.remove();
-  $('evalStopBtn').innerHTML='<i data-lucide="loader-2" class="spin"></i>停止中';
-  if(window.lucide)lucide.createIcons();
-  try{await fetch('/api/eval/run/'+evalRunId+'/stop',{method:'POST'})}catch(e){}
-  // Give the runner 3s to flush, then close SSE and reset UI
-  setTimeout(()=>{
-    if(evalEventSource){evalEventSource.close();evalEventSource=null}
-    evalRunId=null;
-    $('evalRunBtn').disabled=false;
-    $('evalStopBtn').style.display='none';
-    $('evalStopBtn').disabled=false;
-    $('evalStopBtn').innerHTML='<i data-lucide="square"></i>停止';
-    if(window.lucide)lucide.createIcons();
-    loadEvalRuns();
-  },3000);
-}
-
-function streamEval(runId){
-  if(evalEventSource)evalEventSource.close();
-  evalEventSource=new EventSource('/api/eval/run/'+runId+'/stream');
-  evalEventSource.onmessage=e=>{
-    if(e.data==='[EOF]'){evalEventSource.close();evalEventSource=null;onEvalDone();return}
-    try{const ev=JSON.parse(e.data);handleEvalEvent(ev)}catch(ex){}
-  };
-  evalEventSource.onerror=()=>{if(evalEventSource){evalEventSource.close();evalEventSource=null}};
-}
-
-function handleEvalEvent(ev){
-  if(ev.type==='start'){
-    // Only init if no existing data (fresh run, not a resume)
-    if(Object.keys(evalProgressData).length===0)renderEvalProgressInit(ev.model_keys,ev.bench_ids);
-    else{ // ensure table exists for existing data
-      if(!$('evalProgressBody'))renderEvalProgressInit(ev.model_keys,ev.bench_ids);
-    }
-  }else if(ev.type==='pair_start'){
-    const key=ev.model_key+'|'+ev.bench_id;
-    if(!evalProgressData[key])evalProgressData[key]={model:ev.model_key,bench:ev.bench_id,done:0,correct:0,accuracy:0,status:'pending'};
-    evalProgressData[key].model=ev.model_key;
-    evalProgressData[key].bench_name=ev.bench_name;
-    evalProgressData[key].total=ev.total;
-    evalProgressData[key].done=Math.max(ev.done||0,evalProgressData[key].done||0);
-    evalProgressData[key].status='running';
-    renderEvalProgress();
-  }else if(ev.type==='progress'){
-    const key=ev.model_key+'|'+ev.bench_id;
-    if(evalProgressData[key]){
-      evalProgressData[key].done=Math.max(ev.done||0,evalProgressData[key].done||0);
-      evalProgressData[key].correct=ev.correct;
-      evalProgressData[key].accuracy=ev.accuracy;
-    }
-    renderEvalProgress();
-  }else if(ev.type==='pair_done'){
-    const key=ev.model_key+'|'+ev.bench_id;
-    if(evalProgressData[key]){Object.assign(evalProgressData[key],{done:Math.max(ev.processed||0,evalProgressData[key].done||0),correct:ev.correct,accuracy:ev.accuracy,status:ev.aborted?'aborted':'done'})}
-    renderEvalProgress();
-  }else if(ev.type==='error'){
-  }else if(ev.type==='skip'){
-    const key=ev.model_key+'|'+(ev.bench_id||'');
-    evalProgressData[key]={model:ev.model_key,bench:ev.bench_id||'-',total:0,done:0,correct:0,accuracy:0,status:'skipped',reason:ev.reason};
-    renderEvalProgress();
-  }else if(ev.type==='error'){
-    const panel=$('evalProgress');
-    panel.innerHTML='<div style="color:var(--red);padding:8px">Error: '+escapeHtml(ev.message)+'</div>';
-  }else if(ev.type==='done'){
-    evalProgressData._finalResults=ev.results;
-  }
-}
-
-function renderEvalProgressInit(modelKeys,benchIds){
-  // Ensure table exists
-  if(!$('evalProgressBody')){
-    $('evalProgress').innerHTML='<table class="eval-progress-table"><thead><tr><th>Model</th><th>Bench</th><th>Progress</th><th>Acc</th><th></th></tr></thead><tbody id="evalProgressBody"></tbody></table>';
-  }
-  // Only create entries that don't exist yet -- DON'T overwrite
-  // disk-restored progress data
-  modelKeys.forEach(mk=>{
-    benchIds.forEach(bid=>{
-      const key=mk+'|'+bid;
-      if(!evalProgressData[key])evalProgressData[key]={model:mk,bench:bid,total:0,done:0,correct:0,accuracy:0,status:'pending'};
-    });
-  });
-  renderEvalProgress();
-}
-
-function renderEvalProgress(){
-  const body=$('evalProgressBody');
-  if(!body)return;
-  const rows=Object.entries(evalProgressData).filter(([k,v])=>!k.startsWith('_'));
-  if(!rows.length)return;
-  body.innerHTML=rows.map(([key,p])=>{
-    const pct=p.total?(p.done/p.total*100):0;
-    const accClass=p.status==='done'?' done':'';
-    const accTxt=(p.accuracy==null||isNaN(p.accuracy))?'\u2014':p.accuracy.toFixed(1)+'%';
-    const statusBadge=p.status==='done'?'<span class="status-pill completed" style="font-size:9px">done</span>':p.status==='skipped'?'<span class="status-pill interrupted" style="font-size:9px">skip</span>':'';
-    return '<tr><td class="model-cell">'+escapeHtml(p.model)+'</td>'+
-      '<td class="bench-cell">'+escapeHtml(p.bench_name||p.bench)+(p.reason?'<br><span style="font-size:10px;color:var(--text-mute)">'+escapeHtml(p.reason)+'</span>':'')+'</td>'+
-      '<td style="min-width:160px"><div style="display:flex;align-items:center;gap:6px"><span style="font-size:11px;font-family:var(--font-mono)">'+p.done+'/'+(p.total||'?')+'</span><div class="progress-bar"><div class="progress-fill'+(p.status==='done'?' green':'')+'" style="width:'+pct+'%"></div></div></div></td>'+
-      '<td class="acc-cell'+accClass+'">'+accTxt+'</td>'+
-      '<td>'+statusBadge+'</td></tr>';
-  }).join('');
-}
-
-function onEvalDone(){
-  $('evalRunBtn').disabled=false;
-  $('evalStopBtn').style.display='none';
+  try{await fetch('/api/eval/run/'+rid+'/stop',{method:'POST'})}catch(e){}
+  run.status='stopped';
   $('evalStopBtn').disabled=false;
-  $('evalStopBtn').innerHTML='<i data-lucide="square"></i>停止';
-  if(window.lucide)lucide.createIcons();
+  $('evalStopBtn').style.display='none';
+  renderRunningEvalList();
+  renderEvalProgress(rid);
   loadEvalRuns();
 }
-
-async function resumeRun(runId){
-  if(!confirm('\u7ee7\u7eed\u8fd0\u884c '+runId+'? \u5c06\u8df3\u8fc7\u5df2\u5b8c\u6210\u7684\u9898\u76ee\uff0c\u4ece\u65ad\u70b9\u7ee7\u7eed\u3002'))return;
-  try{
-    const r=await fetch('/api/eval/run/'+runId+'/resume',{method:'POST'});
-    const d=await r.json();
-    if(!r.ok){alert('\u7ee7\u7eed\u5931\u8d25: '+(d.detail||JSON.stringify(d)));return}
-    evalRunId=runId;
-    // DON'T fetch progress -- keep data from restoreRunningEval
-    // Just ensure table exists
-    if(!$('evalProgressBody')){
-      $('evalProgress').innerHTML='<table class="eval-progress-table"><thead><tr><th>Model</th><th>Bench</th><th>Progress</th><th>Acc</th><th></th></tr></thead><tbody id="evalProgressBody"></tbody></table>';
-    }
-    renderEvalProgress();
-    $('evalRunBtn').disabled=true;
-    $('evalStopBtn').style.display='inline-flex';
-    streamEval(runId);
-    loadEvalRuns();
-  }catch(e){alert('Failed: '+e)}
-}
-
 async function deleteRun(runId){
   if(!confirm('\u5220\u9664\u8fd0\u884c '+runId+' \u53ca\u5176\u6240\u6709\u7ed3\u679c\u6587\u4ef6?'))return;
-  try{await fetch('/api/eval/run/'+runId,{method:'DELETE'});loadEvalRuns()}catch(e){alert('\u5220\u9664\u5931\u8d25: '+e)}
+  try{
+    await fetch('/api/eval/run/'+runId,{method:'DELETE'});
+    const run=evalRuns[runId];
+    if(run){
+      if(run.eventSource){run.eventSource.close();run.eventSource=null}
+      delete evalRuns[runId];
+    }
+    if(activeEvalRunId===runId){
+      const first=Object.values(evalRuns)[0];
+      if(first)await showEvalRun(first.run_id);
+      else renderEvalProgressEmpty();
+    }else{
+      renderRunningEvalList();
+    }
+    loadEvalRuns();
+  }catch(e){alert('\u5220\u9664\u5931\u8d25: '+e)}
 }
 
 async function loadEvalRuns(){
@@ -1630,6 +1772,7 @@ async function loadEvalRuns(){
         const status=r.status||'unknown';
         const statusClass=status.includes('error')?'error':status==='completed'?'completed':status==='running'?'running':'interrupted';
         const canResume=status==='interrupted'||status==='stopped';
+        const canShowProgress=status==='running'||status==='stopped'||status==='interrupted';
         return '<tr onclick="showRunDetail(\''+r.run_id+'\')">'+
           '<td style="font-family:var(--font-mono);font-size:11px">'+escapeHtml(r.run_id)+'</td>'+
           '<td>'+escapeHtml(cfg.mode||'-')+'</td>'+
@@ -1637,6 +1780,7 @@ async function loadEvalRuns(){
           '<td style="font-size:11px">'+(cfg.bench_ids||[]).length+'</td>'+
           '<td><span class="status-pill '+statusClass+'">'+escapeHtml(status)+'</span></td>'+
           '<td onclick="event.stopPropagation()" style="display:flex;gap:4px">'+
+          (canShowProgress?'<button class="btn btn-xs ghost" onclick="showEvalRun(\''+r.run_id+'\')" title="在实时进度中查看"><i data-lucide="activity"></i></button>':'')+
           (canResume?'<button class="btn btn-xs primary" onclick="resumeRun(\''+r.run_id+'\')" title="\u7ee7\u7eed"><i data-lucide="play"></i></button>':'')+
           '<button class="btn btn-xs danger" onclick="deleteRun(\''+r.run_id+'\')"><i data-lucide="trash-2"></i></button></td></tr>';
       }).join('')+
@@ -1652,12 +1796,14 @@ async function showRunDetail(runId){
     const summ=r.summary||{};
     const results=summ.results||[];
     let html='<h3><i data-lucide="file-text" class="h3-icon"></i>Run: <span class="modal-name">'+escapeHtml(runId)+'</span></h3>';
-    html+='<div style="font-size:12px;color:var(--text-dim);margin-bottom:8px">Mode: '+escapeHtml(cfg.mode||'-')+' | Models: '+escapeHtml((cfg.model_keys||[]).join(', '))+' | Benches: '+escapeHtml((cfg.bench_ids||[]).join(', '))+'</div>';
+    const modelLabels=(cfg.model_keys||[]).map(k=>evalModelNames[k]||k).join(', ');
+    const benchLabels=(cfg.bench_ids||[]).map(id=>benchNameOf(id)||id).join(', ');
+    html+='<div style="font-size:12px;color:var(--text-dim);margin-bottom:8px">Mode: '+escapeHtml(cfg.mode||'-')+' | Models: '+escapeHtml(modelLabels)+' | Benches: '+escapeHtml(benchLabels)+'</div>';
     if(results.length){
       html+='<div class="result-row head"><span>Model</span><span>Bench</span><span>Done</span><span>Correct</span><span>Accuracy</span></div>';
       html+=results.map(x=>{
         const accTxt=(x.accuracy==null||isNaN(x.accuracy))?'\u2014':x.accuracy.toFixed(2)+'%';
-        return '<div class="result-row"><span>'+escapeHtml(x.model_key)+'</span><span>'+escapeHtml(x.bench_name||x.bench_id)+'</span><span>'+(x.processed||0)+'/'+'</span><span>'+(x.correct||0)+'</span><span style="font-family:var(--font-mono);font-weight:600;color:var(--green)">'+accTxt+'</span></div>';
+        return '<div class="result-row"><span>'+escapeHtml(evalModelNames[x.model_key]||x.model_key)+'</span><span>'+escapeHtml(x.bench_name||benchNameOf(x.bench_id)||x.bench_id)+'</span><span>'+(x.processed||0)+'/'+'</span><span>'+(x.correct||0)+'</span><span style="font-family:var(--font-mono);font-weight:600;color:var(--green)">'+accTxt+'</span></div>';
       }).join('');
     }
     if(r.detail_files&&r.detail_files.length){
