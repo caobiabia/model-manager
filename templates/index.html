@@ -738,7 +738,6 @@ svg.lucide{flex-shrink:0;stroke-width:2}
         <div class="lb-actions">
           <button class="btn primary" onclick="openImportModal()"><i data-lucide="download"></i>导入历史记录</button>
           <button class="btn ghost" onclick="loadLeaderboard()"><i data-lucide="refresh-cw"></i>刷新</button>
-          <button class="btn danger" onclick="clearLeaderboard()"><i data-lucide="trash-2"></i>清空</button>
         </div>
         <div id="lbContent"><div class="eval-empty"><i data-lucide="trophy"></i><div>尚无榜单数据</div></div></div>
       </div>
@@ -1984,12 +1983,6 @@ async function deleteLbEntries(category,modelKey){
     }
     loadLeaderboard();
   }catch(e){alert('Failed: '+e)}
-}
-
-async function clearLeaderboard(){
-  if(!confirm('清空所有榜单数据?'))return;
-  await fetch('/api/eval/leaderboard',{method:'DELETE'});
-  loadLeaderboard();
 }
 
 /* ── Init ── */
