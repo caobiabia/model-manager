@@ -114,6 +114,114 @@ def _gpu_processes() -> dict[int, list[str]]:
         return {}
 
 
+def _match_model_cmdline(cmd: str) -> str | None:
+    """Match a process command line to a configured model by its port."""
+    cmd_l = cmd.lower()
+    for key, cfg in _cfg().MODELS.items():
+        if cfg.get("provider") == "deepseek":
+            continue
+        port = cfg.get("port")
+        if port and (f"--port {port}" in cmd_l or f"--port={port}" in cmd_l):
+            return key
+    return None
+
+
+def _gpu_process_details() -> dict[int, list[dict]]:
+    """Return {gpu_index: [{pid, used_mb, command, model_key?, ...}]}."""
+    try:
+        def _run(args: list[str]) -> str:
+            r = subprocess.run(args, capture_output=True, text=True, timeout=10)
+            return r.stdout
+
+        uuid2idx: dict[str, int] = {}
+        for line in _run([
+            "nvidia-smi", "--query-gpu=index,uuid", "--format=csv,noheader,nounits",
+        ]).strip().splitlines():
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) >= 2 and parts[0].isdigit():
+                uuid2idx[parts[1]] = int(parts[0])
+
+        apps: list[tuple[str, int, int]] = []
+        for line in _run([
+            "nvidia-smi", "--query-compute-apps=gpu_uuid,pid,used_memory",
+            "--format=csv,noheader,nounits",
+        ]).strip().splitlines():
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) >= 3 and parts[1].isdigit():
+                used = int(parts[2]) if parts[2].isdigit() else 0
+                apps.append((parts[0], int(parts[1]), used))
+
+        cmdlines: dict[int, str] = {}
+        pids = [pid for _, pid, _ in apps]
+        if pids:
+            out = _run(["ps", "-o", "pid=,args=", "-p", ",".join(map(str, pids))])
+            for line in out.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                sp = line.split(None, 1)
+                if sp and sp[0].isdigit():
+                    cmdlines[int(sp[0])] = sp[1] if len(sp) > 1 else ""
+
+        pid2model: dict[int, str] = {}
+        for key, proc in _procs.items():
+            if proc.poll() is None:
+                pid2model[proc.pid] = key
+
+        def _parent_cmdline(pid: int) -> tuple[int, str]:
+            try:
+                with open(f"/proc/{pid}/stat", "r", encoding="utf-8") as f:
+                    data = f.read()
+                rpar = data.rfind(")")
+                fields = data[rpar + 2:].split()
+                ppid = int(fields[1]) if len(fields) > 1 else 0
+                with open(f"/proc/{ppid}/cmdline", "rb") as f:
+                    cmd = f.read().replace(b"\0", b" ").decode(errors="replace").strip()
+                return ppid, cmd
+            except Exception:
+                return 0, ""
+
+        for pid, cmd in cmdlines.items():
+            if pid not in pid2model:
+                key = _match_model_cmdline(cmd)
+                if key:
+                    pid2model[pid] = key
+                else:
+                    # vLLM GPU processes often show up as "VLLM::EngineCore";
+                    # walk up to the parent whose cmdline names the port/model.
+                    cur = pid
+                    for _ in range(4):
+                        ppid, pcmd = _parent_cmdline(cur)
+                        if not ppid:
+                            break
+                        pkey = _match_model_cmdline(pcmd)
+                        if pkey:
+                            pid2model[pid] = pkey
+                            break
+                        cur = ppid
+
+        result: dict[int, list[dict]] = {}
+        for uuid, pid, used_mb in apps:
+            idx = uuid2idx.get(uuid)
+            if idx is None:
+                continue
+            entry: dict[str, Any] = {
+                "pid": pid,
+                "used_mb": used_mb,
+                "command": cmdlines.get(pid, "")[:80],
+            }
+            key = pid2model.get(pid)
+            if key:
+                cfg = _cfg().MODELS.get(key, {})
+                entry["model_key"] = key
+                entry["display_name"] = cfg.get("display_name", key)
+                entry["port"] = cfg.get("port")
+            result.setdefault(idx, []).append(entry)
+        return result
+    except Exception:
+        return {}
+
+
 # ——— API models ————
 
 class LaunchRequest(BaseModel):
@@ -514,20 +622,38 @@ async def gpu_status() -> list[dict[str, Any]]:
             _thread_pool,
             lambda: subprocess.run(
                 ["nvidia-smi",
-                 "--query-gpu=index,name,memory.total,memory.used,memory.free",
+                 "--query-gpu=index,name,memory.total,memory.used,memory.free,"
+                 "utilization.gpu,temperature.gpu,power.draw,power.limit",
                  "--format=csv,noheader,nounits"],
                 capture_output=True, text=True, timeout=10,
             ),
         )
+        process_map = await loop.run_in_executor(_thread_pool, _gpu_process_details)
         gpus: list[dict[str, Any]] = []
         for line in r.stdout.strip().split("\n"):
             parts = [p.strip() for p in line.split(",")]
-            if len(parts) >= 5:
-                gpus.append({
-                    "index": int(parts[0]), "name": parts[1],
-                    "total_mb": int(parts[2]), "used_mb": int(parts[3]),
-                    "free_mb": int(parts[4]),
-                })
+            if len(parts) < 5:
+                continue
+
+            def _num(v: str) -> float | None:
+                try:
+                    return float(v)
+                except ValueError:
+                    return None
+
+            idx = int(parts[0])
+            gpus.append({
+                "index": idx,
+                "name": parts[1],
+                "total_mb": int(parts[2]),
+                "used_mb": int(parts[3]),
+                "free_mb": int(parts[4]),
+                "utilization_percent": _num(parts[5]),
+                "temperature_c": _num(parts[6]),
+                "power_w": _num(parts[7]),
+                "power_limit_w": _num(parts[8]),
+                "processes": process_map.get(idx, []),
+            })
         return gpus
     except Exception as e:
         raise HTTPException(500, f"GPU query failed: {e}")
