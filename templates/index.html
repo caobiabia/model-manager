@@ -974,19 +974,19 @@ function modelGpuIndex(m){
   for(const g of gpusCache){
     if((g.processes||[]).some(p=>p.pid===m.pid||p.model_key===m.key))return g.index;
   }
-  return (m.gpu!=null)?m.gpu:null;
+  return null;
 }
 function renderModels(models){
   const list=$('modelList'); list.innerHTML='';
   models.forEach(m=>{
     const row=document.createElement('div');
     const isLoading=m.loading;
+    const mgpu=modelGpuIndex(m);
     row.className=(m.key===activeModel?'active ':'')+'model-row';
     if(m.running){
       if(isLoading) row.classList.add('status-loading');
       else row.classList.add('status-on');
     }else{row.classList.add('status-off')}
-    const mgpu=modelGpuIndex(m);
     if(selectedGpu!=null){
       if(mgpu===selectedGpu)row.classList.add('gpu-match');
       else row.classList.add('gpu-muted');
@@ -999,7 +999,8 @@ function renderModels(models){
     const info=document.createElement('div'); info.className='info';
     const name=document.createElement('div'); name.className='name'; name.textContent=m.display_name;
     const detail=document.createElement('div'); detail.className='detail';
-    let parts=['GPU'+(m.gpu||'N/A')];
+    let parts=[];
+    if(mgpu!=null)parts.push('GPU'+mgpu);
     if(m.port)parts.push(':'+m.port);
     if(isLoading)parts.push('[启动中]');
     else if(m.running&&!m.pid)parts.push('[外部检测]');
