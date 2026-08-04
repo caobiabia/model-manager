@@ -556,12 +556,16 @@ svg.lucide{flex-shrink:0;stroke-width:2}
 .eval-progress-table .progress-bar{width:120px;height:6px;background:var(--panel-2);border-radius:3px;overflow:hidden;border:1px solid var(--border)}
 .eval-progress-table .progress-fill{height:100%;background:var(--accent);border-radius:3px;transition:width .3s var(--ease)}
 .eval-progress-table .progress-fill.green{background:var(--green)}
-.eval-run-list{display:flex;flex-direction:column;gap:8px;margin-bottom:12px}
-.eval-run-item{display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--panel-2)}
-.eval-run-item.active{border-color:var(--accent);background:var(--accent-soft)}
-.eval-run-item .run-id{font-family:var(--font-mono);font-size:11px;color:var(--text);font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.eval-run-item .run-summary{font-size:11px;color:var(--text-dim);white-space:nowrap}
-.eval-run-item .btn{flex-shrink:0}
+.eval-run-cards{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end;min-width:0}
+.eval-run-card{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border:1px solid var(--border);border-radius:999px;background:var(--panel-2);font-size:11px;color:var(--text-dim);cursor:pointer;user-select:none;white-space:nowrap;transition:all var(--t-fast)}
+.eval-run-card:hover{border-color:var(--border-strong);color:var(--text)}
+.eval-run-card.active{border-color:var(--accent);background:var(--accent-soft);color:var(--accent);font-weight:600}
+.eval-run-card .status-dot{width:7px;height:7px;border-radius:50%;background:var(--amber);flex-shrink:0}
+.eval-run-card .status-dot.completed{background:var(--green)}
+.eval-run-card .status-dot.stopped{background:var(--text-mute)}
+.eval-run-card .run-id{font-family:var(--font-mono);font-size:10.5px;font-weight:600;color:var(--text)}
+.eval-run-card.active .run-id{color:var(--accent)}
+.eval-run-card .run-summary{color:var(--text-mute);font-family:var(--font-mono);font-size:10.5px}
 
 .eval-empty{text-align:center;padding:32px;color:var(--text-mute);font-size:13px}
 .eval-empty svg.lucide{width:32px;height:32px;margin-bottom:8px;opacity:.4}
@@ -703,9 +707,11 @@ svg.lucide{flex-shrink:0;stroke-width:2}
         </div>
       </div>
       <div class="eval-section">
-        <h3><i data-lucide="activity"></i>实时进度</h3>
+        <div class="eval-section-head">
+          <h3><i data-lucide="activity"></i>实时进度</h3>
+          <div class="eval-run-cards" id="runningEvalList"></div>
+        </div>
         <div id="evalProgress">
-          <div class="eval-run-list" id="runningEvalList"></div>
           <div id="evalProgressDetail">
             <div class="eval-empty"><i data-lucide="clipboard-list"></i><div>尚无测评任务</div></div>
           </div>
@@ -1505,13 +1511,8 @@ function updateRunSummary(runId){
   const total=entries.reduce((s,p)=>s+(Number(p.total)||0),0);
   const donePairs=entries.filter(p=>p.status==='done'||(p.total>0&&p.done>=p.total)).length;
   const totalPairs=(run.modelKeys.length*run.benchIds.length)||entries.length;
-  const parts=[];
-  if(run.modelKeys.length)parts.push(run.modelKeys.length+' 模型');
-  if(run.benchIds.length)parts.push(run.benchIds.length+' Bench');
-  parts.push('完成 '+donePairs+'/'+totalPairs);
-  if(total)parts.push(done+'/'+total+' 题');
   const sum=el.querySelector('.run-summary');
-  if(sum)sum.textContent=parts.join(' · ');
+  if(sum)sum.textContent=total?done+'/'+total:(totalPairs?donePairs+'/'+totalPairs:'');
 }
 function renderRunningEvalList(){
   const list=$('runningEvalList');
@@ -1519,15 +1520,14 @@ function renderRunningEvalList(){
   const runs=Object.values(evalRuns);
   list.innerHTML=runs.map(r=>{
     const active=r.run_id===activeEvalRunId;
-    return '<div class="eval-run-item'+(active?' active':'')+'" id="run-row-'+r.run_id+'">'+
-      '<span class="status-pill '+evalStatusClass(r.status)+'" style="flex-shrink:0">'+evalStatusLabel(r.status)+'</span>'+
-      '<span class="run-id">'+escapeHtml(r.run_id)+'</span>'+
+    const dotClass=r.status==='completed'?'completed':(r.status==='stopped'||r.status==='interrupted'?'stopped':'running');
+    return '<div class="eval-run-card'+(active?' active':'')+'" id="run-row-'+r.run_id+'" onclick="showEvalRun(\''+r.run_id+'\')" title="'+escapeHtml(r.run_id)+'">'+
+      '<span class="status-dot '+dotClass+'"></span>'+
+      '<span class="run-id">'+escapeHtml(r.run_id.slice(-6))+'</span>'+
       '<span class="run-summary"></span>'+
-      '<button class="btn btn-xs primary" onclick="showEvalRun(\''+r.run_id+'\')"><i data-lucide="eye"></i>查看进度</button>'+
     '</div>';
   }).join('');
   Object.keys(evalRuns).forEach(updateRunSummary);
-  if(window.lucide)lucide.createIcons();
 }
 async function showEvalRun(runId){
   let run=evalRuns[runId];
