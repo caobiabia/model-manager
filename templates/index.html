@@ -1133,7 +1133,7 @@ function makeModelRow(m){
     if(isLoading) row.classList.add('status-loading');
     else row.classList.add('status-on');
   }else{row.classList.add('status-off')}
-  row.onclick=()=>{if(editingDescKey===m.key)return;selectModel(m.key,m.running)};
+  row.onclick=()=>{if(editingDescKey)return;selectModel(m.key,m.running)};
   const dot=document.createElement('div');
   dot.className='status '+(m.running?(isLoading?'loading':'on'):'off');
   if(isLoading)dot.title='启动中...';
@@ -1265,7 +1265,7 @@ function renderModelList(){
 function renderModels(models){
   allModels=models;
   updateModelCounts(models);
-  renderModelList();
+  if(!editingDescKey)renderModelList();
 }
 function onModelSearch(v){
   modelQuery=v.trim().toLowerCase();

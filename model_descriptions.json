@@ -1,3 +1,6 @@
 {
-  "qwen35b_full_sft_5xqa_pubmedqa": "5倍q a"
+  "qwen35b_full_sft_5xqa_pubmedqa": "5:1 一轮",
+  "qwen35b_full_sft_medical_mix_v3_epoch1": "1:1 一轮",
+  "qwen35b_full_sft_medical_mix_v3_epoch2": "1:1 二轮",
+  "qwen35b": "基座"
 }
