@@ -713,7 +713,7 @@ svg.lucide{flex-shrink:0;stroke-width:2}
           <h3><i data-lucide="activity"></i>实时进度</h3>
         </div>
         <div class="eval-progress-split">
-          <div class="eval-run-cards" id="runningEvalList"></div>
+          <div class="eval-run-cards" id="runningEvalList" style="display:none"></div>
           <div id="evalProgressDetail">
             <div class="eval-empty"><i data-lucide="clipboard-list"></i><div>尚无测评任务</div></div>
           </div>
@@ -1519,6 +1519,8 @@ function renderRunningEvalList(){
   const list=$('runningEvalList');
   if(!list)return;
   const runs=Object.values(evalRuns);
+  if(!runs.length){list.style.display='none';return}
+  list.style.display='flex';
   list.innerHTML=runs.map(r=>{
     const active=r.run_id===activeEvalRunId;
     const dotClass=r.status==='completed'?'completed':(r.status==='stopped'||r.status==='interrupted'?'stopped':'running');
@@ -1670,12 +1672,11 @@ function onEvalDone(runId){
   if(run.status==='running')run.status='completed';
   if(run.status==='completed'){
     delete evalRuns[runId];
+    renderRunningEvalList();
     if(activeEvalRunId===runId){
       const first=Object.values(evalRuns)[0];
       if(first)showEvalRun(first.run_id);
       else renderEvalProgressEmpty();
-    }else{
-      renderRunningEvalList();
     }
   }else{
     renderRunningEvalList();
@@ -1774,12 +1775,11 @@ async function deleteRun(runId){
       if(run.eventSource){run.eventSource.close();run.eventSource=null}
       delete evalRuns[runId];
     }
+    renderRunningEvalList();
     if(activeEvalRunId===runId){
       const first=Object.values(evalRuns)[0];
       if(first)await showEvalRun(first.run_id);
       else renderEvalProgressEmpty();
-    }else{
-      renderRunningEvalList();
     }
     loadEvalRuns();
   }catch(e){alert('\u5220\u9664\u5931\u8d25: '+e)}
