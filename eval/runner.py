@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 import time
 import concurrent.futures
@@ -29,6 +30,8 @@ from eval.common import (
     call_model,
     create_client,
     extract_answer,
+    extract_free_answer,
+    extract_patch,
     get_extract_model,
     load_processed_ids,
     save_progress,
@@ -71,6 +74,9 @@ class EvalRunner:
 
         self.results: dict[tuple[str, str], dict] = {}
         self.error: str | None = None
+        # live progress snapshot, updated alongside queue events
+        self.progress: dict[str, dict] = {}
+        self._progress_lock = Lock()
 
     # -- public API -------------------------------------------------------
 
@@ -80,6 +86,55 @@ class EvalRunner:
     @property
     def stopped(self) -> bool:
         return self._stop.is_set()
+
+    def _init_progress_from_disk(self) -> None:
+        """Populate self.progress from existing files before starting.
+
+        Called by the resume endpoint so get_progress() returns correct
+        data immediately, before any questions are processed.
+        """
+        from eval.benches import get_bench
+        from eval.common import load_processed_ids, load_jsonl
+
+        for model_key in self.model_keys:
+            cfg = get_model_by_name(model_key)
+            if cfg is None:
+                continue
+            model_short = cfg.get("served_model_name", model_key).split("/")[-1]
+            for bench_id in self.bench_ids:
+                bench = get_bench(bench_id)
+                if bench is None:
+                    continue
+                pf = str(self.output_dir / f"progress_{model_short}_{bench_id}_{self.mode}.txt")
+                rf = self.output_dir / f"{model_short}__{bench_id}__{self.mode}.json"
+                processed_ids = load_processed_ids(pf)
+                total = 0
+                if Path(bench.data_file).exists():
+                    total = len(load_jsonl(bench.data_file))
+                done = min(len(processed_ids), total) if total > 0 else len(processed_ids)
+                correct = 0
+                if rf.exists():
+                    try:
+                        results = json.loads(rf.read_text(encoding="utf-8"))
+                        seen = set()
+                        unique = [x for x in results if x.get("realidx") not in seen and not seen.add(x.get("realidx"))]
+                        done = max(done, min(len(unique), total)) if total > 0 else len(unique)
+                        correct = sum(1 for x in unique if x.get("correct") is True)
+                    except Exception:
+                        pass
+                if getattr(bench, "scorable", True):
+                    acc = round(correct / done * 100, 1) if done > 0 else 0
+                else:
+                    acc = None
+                key = f"{model_key}|{bench_id}"
+                with self._progress_lock:
+                    self.progress[key] = {
+                        "model_key": model_key, "model": model_key, "bench_id": bench_id,
+                        "bench_name": bench.name, "total": total,
+                        "done": done, "correct": correct,
+                        "accuracy": acc,
+                        "status": "done" if (total > 0 and done >= total) else "interrupted",
+                    }
 
     def run(self) -> None:
         """Main entry -- call from a background thread."""
@@ -222,35 +277,63 @@ class EvalRunner:
                 break
             to_process.append((i, q))
 
+        results = []
         if os.path.exists(results_file):
-            with open(results_file, "r", encoding="utf-8") as f:
-                results = json.load(f)
-        else:
-            results = []
+            try:
+                with open(results_file, "r", encoding="utf-8") as f:
+                    results = json.load(f)
+                # deduplicate by realidx
+                seen = set()
+                deduped = []
+                for r in results:
+                    rid = r.get("realidx")
+                    if rid not in seen:
+                        seen.add(rid)
+                        deduped.append(r)
+                results = deduped
+            except (json.JSONDecodeError, Exception):
+                # corrupted file (interrupted write) -- start fresh
+                results = []
+
+        # The results file is authoritative for what has actually been
+        # persisted. Progress entries without a saved result (e.g. a write
+        # failed when the disk filled up) must NOT be skipped on resume.
+        if results:
+            processed_ids = {r.get("realidx") for r in results}
 
         self.queue.put({
             "type": "pair_start",
             "model_key": model_key, "bench_id": bench_id,
             "bench_name": bench.name, "total": total,
+            "done": min(len(processed_ids), total) if total > 0 else len(processed_ids),
             "resume_skipped": total - len(to_process),
         })
 
         if not to_process:
             # All already processed (resume)
             correct = sum(1 for r in results if r.get("correct") is True)
-            acc = correct / len(results) * 100 if results else 0
+            scored = sum(1 for r in results if r.get("correct") is not None)
+            acc = round(correct / scored * 100, 2) if scored else None
             self.results[(model_key, bench_id)] = {
                 "model_key": model_key, "bench_id": bench_id,
                 "bench_name": bench.name, "mode": self.mode,
                 "processed": len(results), "correct": correct,
-                "accuracy": round(acc, 2), "time_elapsed": 0,
+                "accuracy": acc, "time_elapsed": 0,
                 "results_file": results_file,
             }
+            with self._progress_lock:
+                pk = f"{model_key}|{bench_id}"
+                if pk in self.progress:
+                    self.progress[pk].update({
+                        "done": len(results), "correct": correct,
+                        "accuracy": acc, "status": "done",
+                    })
             self.queue.put({
                 "type": "pair_done", "model_key": model_key,
                 "bench_id": bench_id, "bench_name": bench.name,
                 "processed": len(results), "correct": correct,
-                "accuracy": round(acc, 2), "time": 0,
+                "accuracy": acc, "time": 0,
+                "aborted": False,
             })
             return
 
@@ -266,7 +349,15 @@ class EvalRunner:
             question = problem.get("question", "")
             options = problem.get("options", {})
             answer_idx = problem.get("answer_idx", "")
-            if not question or not options:
+            is_free = getattr(bench, "format", "mcq") == "free"
+            is_patch = getattr(bench, "format", "mcq") == "patch"
+            gold = (
+                str(problem.get("answer", answer_idx)).strip()
+                if is_free else answer_idx
+            )
+            if not question:
+                return None
+            if not is_free and not is_patch and not options:
                 return None
 
             messages = bench.build_messages(problem, self.mode)
@@ -275,31 +366,42 @@ class EvalRunner:
             try:
                 raw, reasoning, usage = call_model(
                     client, model_name, messages, self.mode, is_deepseek,
+                    max_tokens=12000 if is_patch else None,
                 )
             except Exception as e:
                 return {"realidx": realidx, "error": str(e)}
 
-            pred = extract_answer(
-                raw, options, ext_client, ext_model, ext_deepseek,
-            )
-            if pred is None:
+            if is_free:
+                pred = extract_free_answer(raw)
+                if pred is None:
+                    pred = extract_free_answer(reasoning, strict=True)
+            elif is_patch:
+                pred = extract_patch(raw)
+                if pred is None:
+                    pred = extract_patch(reasoning)
+            else:
                 pred = extract_answer(
-                    reasoning, options, ext_client, ext_model, ext_deepseek,
+                    raw, options, ext_client, ext_model, ext_deepseek,
                 )
+                if pred is None:
+                    pred = extract_answer(
+                        reasoning, options, ext_client, ext_model, ext_deepseek,
+                        strict=True,
+                    )
 
             correct = None
-            if pred is not None:
-                correct = (pred == answer_idx)
+            if pred is not None and not is_patch:
+                correct = (pred == gold)
 
             prompt_tokens = usage.prompt_tokens if usage else 0
             completion_tokens = usage.completion_tokens if usage else 0
             elapsed = time.time() - q_start
 
-            return {
+            result = {
                 "realidx": realidx,
                 "question": question,
                 "options": options,
-                "answer_idx": answer_idx,
+                "answer_idx": gold,
                 "predicted_answer": pred or "",
                 "correct": correct,
                 "raw_response": raw,
@@ -310,6 +412,14 @@ class EvalRunner:
                 },
                 "time_elapsed": elapsed,
             }
+            if is_patch:
+                result["instance_id"] = problem.get("instance_id", "")
+                result["repo"] = problem.get("repo", "")
+                result["base_commit"] = problem.get("base_commit", "")
+                result["predicted_patch"] = pred or ""
+                result["patch_generated"] = bool(pred)
+                result.pop("predicted_answer", None)
+            return result
 
         # -- rolling submission: only workers+1 futures alive at a time --
         # This makes stop responsive: new futures aren't submitted after
@@ -387,11 +497,13 @@ class EvalRunner:
                 correct_count = sum(
                     1 for r in results if r.get("correct") is True
                 )
+                scored_count = sum(
+                    1 for r in results if r.get("correct") is not None
+                )
                 processed_count = len(results)
                 acc = (
-                    correct_count / processed_count * 100
-                    if processed_count > 0
-                    else 0
+                    round(correct_count / scored_count * 100, 1)
+                    if scored_count > 0 else None
                 )
 
                 if completed % 5 == 0 or completed == total:
@@ -401,7 +513,7 @@ class EvalRunner:
                         "model_key": model_key, "bench_id": bench_id,
                         "done": completed, "total": total,
                         "correct": correct_count,
-                        "accuracy": round(acc, 1),
+                        "accuracy": acc,
                         "elapsed": round(elapsed, 0),
                     })
 
@@ -413,8 +525,12 @@ class EvalRunner:
 
         elapsed = time.time() - start_time
         correct_count = sum(1 for r in results if r.get("correct") is True)
+        scored_count = sum(1 for r in results if r.get("correct") is not None)
         processed_count = len(results)
-        accuracy = correct_count / processed_count * 100 if processed_count > 0 else 0
+        accuracy = (
+            round(correct_count / scored_count * 100, 2)
+            if scored_count > 0 else None
+        )
         total_prompt = sum(
             r.get("token_usage", {}).get("prompt_tokens", 0) for r in results
         )
@@ -429,7 +545,7 @@ class EvalRunner:
             "mode": self.mode,
             "processed": processed_count,
             "correct": correct_count,
-            "accuracy": round(accuracy, 2),
+            "accuracy": accuracy,
             "total_prompt_tokens": total_prompt,
             "total_completion_tokens": total_completion,
             "time_elapsed": round(elapsed, 0),
@@ -443,7 +559,7 @@ class EvalRunner:
             "model_key": model_key, "bench_id": bench_id,
             "bench_name": bench.name,
             "processed": processed_count, "correct": correct_count,
-            "accuracy": round(accuracy, 2), "time": round(elapsed, 0),
+            "accuracy": accuracy, "time": round(elapsed, 0),
             "aborted": aborted,
         })
 
@@ -489,8 +605,22 @@ class EvalRunner:
         }
         if self.error:
             summary["error"] = self.error
-        with open(self.output_dir / "summary.json", "w", encoding="utf-8") as f:
-            json.dump(summary, f, indent=2, ensure_ascii=False)
+        # Atomic write: never leave a 0-byte summary behind if the disk is
+        # full or the process dies mid-write. A failed summary write is
+        # reported on stderr but must not turn a completed run into an error.
+        tmp_file = self.output_dir / "summary.json.tmp"
+        try:
+            with open(tmp_file, "w", encoding="utf-8") as f:
+                json.dump(summary, f, indent=2, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_file, self.output_dir / "summary.json")
+        except OSError as e:
+            try:
+                tmp_file.unlink(missing_ok=True)
+            except OSError:
+                pass
+            print(f"WARNING: failed to write summary.json: {e}", file=sys.stderr)
 
 
 # -- helpers for the API layer --------------------------------------------
@@ -525,6 +655,9 @@ def list_runs() -> list[dict[str, Any]]:
             has_progress = any(
                 f.name.startswith("progress_") for f in entry.iterdir()
             )
-            meta["status"] = "running" if has_progress else "completed"
+            # "running" means there are progress files but no summary --
+            # since the server may have restarted, this is really
+            # "interrupted" unless an in-memory entry says it's active.
+            meta["status"] = "interrupted" if has_progress else "completed"
         runs.append(meta)
     return runs

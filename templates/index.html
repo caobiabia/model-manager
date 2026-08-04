@@ -503,6 +503,7 @@ svg.lucide{flex-shrink:0;stroke-width:2}
 .status-pill.completed{background:var(--green-soft);color:var(--green)}
 .status-pill.error{background:var(--red-soft);color:var(--red)}
 .status-pill.interrupted{background:var(--amber-soft);color:var(--amber)}
+.status-pill.stopped{background:var(--amber-soft);color:var(--amber)}
 
 /* leaderboard */
 .lb-section{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px;margin-bottom:14px}
@@ -601,7 +602,7 @@ svg.lucide{flex-shrink:0;stroke-width:2}
           </div>
           <div class="eval-field">
             <label>并发线程</label>
-            <input type="number" id="evalWorkers" value="10" min="1" max="50">
+            <input type="number" id="evalWorkers" value="50" min="1" max="200">
           </div>
           <div class="eval-field">
             <label>限制题数 (0=全部)</label>
@@ -660,7 +661,7 @@ svg.lucide{flex-shrink:0;stroke-width:2}
     </div>
     <div class="field">
       <label>显存占用 (gpu-memory-utilization)</label>
-      <input type="range" id="launchMem" min="0.2" max="1.0" step="0.05" value="0.8" oninput="$('launchMemVal').textContent=this.value">
+      <input type="range" id="launchMem" min="0.2" max="1.0" step="0.01" value="0.8" oninput="$('launchMemVal').textContent=this.value">
       <span class="range-val" id="launchMemVal">0.8</span>
     </div>
     <div class="field">
@@ -1087,16 +1088,19 @@ async function loadEvalBenches(){
 
 function renderBenchGrid(){
   const grid=$('evalBenchGrid'); grid.innerHTML='';
-  const groups={'hard':[],'full':[],'s10':[],'subset':[]};
+  const groups={'hard':[],'full':[],'general':[],'s10':[],'subset':[]};
   evalBenches.forEach(b=>{
     if(b.split==='test_hard')groups.hard.push(b);
     else if(b.split==='test')groups.full.push(b);
+    else if(b.split==='general')groups.general.push(b);
+    else if(b.split==='general_subset')groups.general.push(b);
     else if(b.split&&b.split.startsWith('sampled10'))groups.s10.push(b);
     else groups.subset.push(b);
   });
   const labels={
     'hard':'\u5168\u91cf Hard (test_hard, 1251\u9898)',
     'full':'\u5168\u91cf Test (test, 11636\u9898)',
+    'general':'\u901a\u7528 Bench (MMLU/GSM8K/C-Eval/GPQA/AIME)',
     's10':'\u91c7\u6837 10% (EN+\u4e2d\u6587, hard+easy)',
     'subset':'\u81ea\u5b9a\u4e49\u5b50\u96c6'
   };
@@ -1212,32 +1216,38 @@ function setEvalMode(mode){
 }
 
 async function restoreRunningEval(){
-  // Check if there's a running eval -- restore its progress on page refresh
   try{
     const runs=await(await fetch('/api/eval/runs')).json();
-    const running=runs.find(r=>r.status==='running'||r.status==='stopped');
-    if(!running)return;
-    const rid=running.run_id;
+    // Find a running or interrupted run
+    const target=runs.find(r=>r.status==='running'||r.status==='stopped'||r.status==='interrupted');
+    if(!target)return;
+    const rid=target.run_id;
     const r=await fetch('/api/eval/run/'+rid+'/progress');
     if(!r.ok)return;
     const d=await r.json();
     const prog=d.progress||{};
-    // Restore progress table
     const keys=Object.keys(prog);
     if(!keys.length)return;
     evalRunId=rid;
     evalProgressData={};
-    // init table
     const panel=$('evalProgress');
-    panel.innerHTML='<table class="eval-progress-table"><thead><tr><th>Model</th><th>Bench</th><th>Progress</th><th>Acc</th><th></th></tr></thead><tbody id="evalProgressBody"></tbody></table>';
-    keys.forEach(k=>{
-      evalProgressData[k]=prog[k];
-    });
+    const isActive=target.status==='running'||target.status==='stopped';
+    // For interrupted runs, add a resume button in the progress header
+    let headerHtml='<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">';
+    headerHtml+='<span style="font-size:12px;color:var(--text-dim)">'+(isActive?'\u8fd0\u884c\u4e2d':'\u5df2\u4e2d\u65ad')+'</span>';
+    if(!isActive){
+      headerHtml+='<button class="btn btn-xs primary" onclick="resumeRun(\''+rid+'\')"><i data-lucide="play"></i>\u7ee7\u7eed\u8fd0\u884c</button>';
+    }
+    headerHtml+='</div>';
+    panel.innerHTML=headerHtml+'<table class="eval-progress-table"><thead><tr><th>Model</th><th>Bench</th><th>Progress</th><th>Acc</th><th></th></tr></thead><tbody id="evalProgressBody"></tbody></table>';
+    keys.forEach(k=>{evalProgressData[k]=prog[k]});
     renderEvalProgress();
-    // Reconnect SSE
-    $('evalRunBtn').disabled=true;
-    $('evalStopBtn').style.display='inline-flex';
-    streamEval(rid);
+    if(isActive){
+      $('evalRunBtn').disabled=true;
+      $('evalStopBtn').style.display='inline-flex';
+      streamEval(rid);
+    }
+    if(window.lucide)lucide.createIcons();
   }catch(e){console.error('restoreRunningEval',e)}
 }
 
@@ -1302,21 +1312,31 @@ function streamEval(runId){
 
 function handleEvalEvent(ev){
   if(ev.type==='start'){
-    renderEvalProgressInit(ev.model_keys,ev.bench_ids);
+    // Only init if no existing data (fresh run, not a resume)
+    if(Object.keys(evalProgressData).length===0)renderEvalProgressInit(ev.model_keys,ev.bench_ids);
+    else{ // ensure table exists for existing data
+      if(!$('evalProgressBody'))renderEvalProgressInit(ev.model_keys,ev.bench_ids);
+    }
   }else if(ev.type==='pair_start'){
     const key=ev.model_key+'|'+ev.bench_id;
     if(!evalProgressData[key])evalProgressData[key]={model:ev.model_key,bench:ev.bench_id,done:0,correct:0,accuracy:0,status:'pending'};
+    evalProgressData[key].model=ev.model_key;
     evalProgressData[key].bench_name=ev.bench_name;
     evalProgressData[key].total=ev.total;
+    evalProgressData[key].done=Math.max(ev.done||0,evalProgressData[key].done||0);
     evalProgressData[key].status='running';
     renderEvalProgress();
   }else if(ev.type==='progress'){
     const key=ev.model_key+'|'+ev.bench_id;
-    if(evalProgressData[key]){Object.assign(evalProgressData[key],{done:ev.done,correct:ev.correct,accuracy:ev.accuracy})}
+    if(evalProgressData[key]){
+      evalProgressData[key].done=Math.max(ev.done||0,evalProgressData[key].done||0);
+      evalProgressData[key].correct=ev.correct;
+      evalProgressData[key].accuracy=ev.accuracy;
+    }
     renderEvalProgress();
   }else if(ev.type==='pair_done'){
     const key=ev.model_key+'|'+ev.bench_id;
-    if(evalProgressData[key]){Object.assign(evalProgressData[key],{correct:ev.correct,accuracy:ev.accuracy,status:ev.aborted?'aborted':'done'})}
+    if(evalProgressData[key]){Object.assign(evalProgressData[key],{done:Math.max(ev.processed||0,evalProgressData[key].done||0),correct:ev.correct,accuracy:ev.accuracy,status:ev.aborted?'aborted':'done'})}
     renderEvalProgress();
   }else if(ev.type==='error'){
   }else if(ev.type==='skip'){
@@ -1332,13 +1352,16 @@ function handleEvalEvent(ev){
 }
 
 function renderEvalProgressInit(modelKeys,benchIds){
-  const panel=$('evalProgress');
-  panel.innerHTML='<table class="eval-progress-table"><thead><tr><th>Model</th><th>Bench</th><th>Progress</th><th>Acc</th><th></th></tr></thead><tbody id="evalProgressBody"></tbody></table>';
-  const body=$('evalProgressBody');
+  // Ensure table exists
+  if(!$('evalProgressBody')){
+    $('evalProgress').innerHTML='<table class="eval-progress-table"><thead><tr><th>Model</th><th>Bench</th><th>Progress</th><th>Acc</th><th></th></tr></thead><tbody id="evalProgressBody"></tbody></table>';
+  }
+  // Only create entries that don't exist yet -- DON'T overwrite
+  // disk-restored progress data
   modelKeys.forEach(mk=>{
     benchIds.forEach(bid=>{
       const key=mk+'|'+bid;
-      evalProgressData[key]={model:mk,bench:bid,total:0,done:0,correct:0,accuracy:0,status:'pending'};
+      if(!evalProgressData[key])evalProgressData[key]={model:mk,bench:bid,total:0,done:0,correct:0,accuracy:0,status:'pending'};
     });
   });
   renderEvalProgress();
@@ -1352,11 +1375,12 @@ function renderEvalProgress(){
   body.innerHTML=rows.map(([key,p])=>{
     const pct=p.total?(p.done/p.total*100):0;
     const accClass=p.status==='done'?' done':'';
+    const accTxt=(p.accuracy==null||isNaN(p.accuracy))?'\u2014':p.accuracy.toFixed(1)+'%';
     const statusBadge=p.status==='done'?'<span class="status-pill completed" style="font-size:9px">done</span>':p.status==='skipped'?'<span class="status-pill interrupted" style="font-size:9px">skip</span>':'';
     return '<tr><td class="model-cell">'+escapeHtml(p.model)+'</td>'+
       '<td class="bench-cell">'+escapeHtml(p.bench_name||p.bench)+(p.reason?'<br><span style="font-size:10px;color:var(--text-mute)">'+escapeHtml(p.reason)+'</span>':'')+'</td>'+
       '<td style="min-width:160px"><div style="display:flex;align-items:center;gap:6px"><span style="font-size:11px;font-family:var(--font-mono)">'+p.done+'/'+(p.total||'?')+'</span><div class="progress-bar"><div class="progress-fill'+(p.status==='done'?' green':'')+'" style="width:'+pct+'%"></div></div></div></td>'+
-      '<td class="acc-cell'+accClass+'">'+(p.accuracy||0).toFixed(1)+'%</td>'+
+      '<td class="acc-cell'+accClass+'">'+accTxt+'</td>'+
       '<td>'+statusBadge+'</td></tr>';
   }).join('');
 }
@@ -1370,6 +1394,26 @@ function onEvalDone(){
   loadEvalRuns();
 }
 
+async function resumeRun(runId){
+  if(!confirm('\u7ee7\u7eed\u8fd0\u884c '+runId+'? \u5c06\u8df3\u8fc7\u5df2\u5b8c\u6210\u7684\u9898\u76ee\uff0c\u4ece\u65ad\u70b9\u7ee7\u7eed\u3002'))return;
+  try{
+    const r=await fetch('/api/eval/run/'+runId+'/resume',{method:'POST'});
+    const d=await r.json();
+    if(!r.ok){alert('\u7ee7\u7eed\u5931\u8d25: '+(d.detail||JSON.stringify(d)));return}
+    evalRunId=runId;
+    // DON'T fetch progress -- keep data from restoreRunningEval
+    // Just ensure table exists
+    if(!$('evalProgressBody')){
+      $('evalProgress').innerHTML='<table class="eval-progress-table"><thead><tr><th>Model</th><th>Bench</th><th>Progress</th><th>Acc</th><th></th></tr></thead><tbody id="evalProgressBody"></tbody></table>';
+    }
+    renderEvalProgress();
+    $('evalRunBtn').disabled=true;
+    $('evalStopBtn').style.display='inline-flex';
+    streamEval(runId);
+    loadEvalRuns();
+  }catch(e){alert('Failed: '+e)}
+}
+
 async function deleteRun(runId){
   if(!confirm('\u5220\u9664\u8fd0\u884c '+runId+' \u53ca\u5176\u6240\u6709\u7ed3\u679c\u6587\u4ef6?'))return;
   try{await fetch('/api/eval/run/'+runId,{method:'DELETE'});loadEvalRuns()}catch(e){alert('\u5220\u9664\u5931\u8d25: '+e)}
@@ -1380,22 +1424,23 @@ async function loadEvalRuns(){
   try{
     const runs=await(await fetch('/api/eval/runs')).json();
     if(!runs.length){panel.innerHTML='<div class="eval-empty"><i data-lucide="history"></i><div>暂无历史记录</div></div>';if(window.lucide)lucide.createIcons();return}
-    panel.innerHTML='<table class="eval-history-table"><thead><tr><th>Run ID</th><th>Mode</th><th>Models</th><th>Benches</th><th>Status</th><th>Acc</th><th></th></tr></thead><tbody>'+
+    panel.innerHTML='<table class="eval-history-table"><thead><tr><th>Run ID</th><th>Mode</th><th>Models</th><th>Benches</th><th>Status</th><th></th></tr></thead><tbody>'+
       runs.map(r=>{
         const cfg=r.config||{};
         const summ=r.summary||{};
         const results=summ.results||[];
-        const avgAcc=results.length?(results.reduce((s,x)=>s+(x.accuracy||0),0)/results.length).toFixed(1)+'%':'-';
         const status=r.status||'unknown';
         const statusClass=status.includes('error')?'error':status==='completed'?'completed':status==='running'?'running':'interrupted';
+        const canResume=status==='interrupted'||status==='stopped';
         return '<tr onclick="showRunDetail(\''+r.run_id+'\')">'+
           '<td style="font-family:var(--font-mono);font-size:11px">'+escapeHtml(r.run_id)+'</td>'+
           '<td>'+escapeHtml(cfg.mode||'-')+'</td>'+
           '<td style="font-size:11px">'+(cfg.model_keys||[]).length+'</td>'+
           '<td style="font-size:11px">'+(cfg.bench_ids||[]).length+'</td>'+
           '<td><span class="status-pill '+statusClass+'">'+escapeHtml(status)+'</span></td>'+
-          '<td style="font-family:var(--font-mono);font-weight:600">'+avgAcc+'</td>'+
-      '<td onclick="event.stopPropagation()"><button class="btn btn-xs danger" onclick="deleteRun(\''+r.run_id+'\')"><i data-lucide="trash-2"></i></button></td></tr>';
+          '<td onclick="event.stopPropagation()" style="display:flex;gap:4px">'+
+          (canResume?'<button class="btn btn-xs primary" onclick="resumeRun(\''+r.run_id+'\')" title="\u7ee7\u7eed"><i data-lucide="play"></i></button>':'')+
+          '<button class="btn btn-xs danger" onclick="deleteRun(\''+r.run_id+'\')"><i data-lucide="trash-2"></i></button></td></tr>';
       }).join('')+
       '</tbody></table>';
   }catch(e){panel.innerHTML='Failed: '+escapeHtml(e)}
@@ -1412,7 +1457,10 @@ async function showRunDetail(runId){
     html+='<div style="font-size:12px;color:var(--text-dim);margin-bottom:8px">Mode: '+escapeHtml(cfg.mode||'-')+' | Models: '+escapeHtml((cfg.model_keys||[]).join(', '))+' | Benches: '+escapeHtml((cfg.bench_ids||[]).join(', '))+'</div>';
     if(results.length){
       html+='<div class="result-row head"><span>Model</span><span>Bench</span><span>Done</span><span>Correct</span><span>Accuracy</span></div>';
-      html+=results.map(x=>'<div class="result-row"><span>'+escapeHtml(x.model_key)+'</span><span>'+escapeHtml(x.bench_name||x.bench_id)+'</span><span>'+(x.processed||0)+'/'+'</span><span>'+(x.correct||0)+'</span><span style="font-family:var(--font-mono);font-weight:600;color:var(--green)">'+(x.accuracy||0).toFixed(2)+'%</span></div>').join('');
+      html+=results.map(x=>{
+        const accTxt=(x.accuracy==null||isNaN(x.accuracy))?'\u2014':x.accuracy.toFixed(2)+'%';
+        return '<div class="result-row"><span>'+escapeHtml(x.model_key)+'</span><span>'+escapeHtml(x.bench_name||x.bench_id)+'</span><span>'+(x.processed||0)+'/'+'</span><span>'+(x.correct||0)+'</span><span style="font-family:var(--font-mono);font-weight:600;color:var(--green)">'+accTxt+'</span></div>';
+      }).join('');
     }
     if(r.detail_files&&r.detail_files.length){
       html+='<div style="margin-top:12px;font-size:11px;color:var(--text-dim)">Detail files:</div>';
@@ -1464,16 +1512,16 @@ function renderLeaderboard(){
     // per-model avg
     const modelAvgs={};
     models.forEach(mk=>{
-      const accs=items.filter(e=>e.model_key===mk).map(e=>e.accuracy||0);
-      modelAvgs[mk]=accs.length?(accs.reduce((a,b)=>a+b,0)/accs.length):0;
+      const accs=items.filter(e=>e.model_key===mk).map(e=>e.accuracy).filter(a=>Number.isFinite(a));
+      modelAvgs[mk]=accs.length?(accs.reduce((a,b)=>a+b,0)/accs.length):null;
     });
-    models.sort((a,b)=>modelAvgs[b]-modelAvgs[a]);
+    models.sort((a,b)=>(modelAvgs[b]??-1)-(modelAvgs[a]??-1));
     // per-bench best across ALL models (for bold highlighting)
     const benchBest={};
     benches.forEach(b=>{
       const bid=b.split(':')[0];
-      const all=items.filter(e=>e.bench_id===bid).map(e=>e.accuracy||0);
-      benchBest[bid]=all.length?Math.max(...all):0;
+      const all=items.filter(e=>e.bench_id===bid).map(e=>e.accuracy).filter(a=>Number.isFinite(a));
+      benchBest[bid]=all.length?Math.max(...all):null;
     });
     html+='<div class="lb-section"><h3><i data-lucide="trophy"></i>'+escapeHtml(label)+' ('+models.length+' 模型, '+benches.length+' bench)</h3>';
     html+='<div style="overflow-x:auto"><table class="lb-table"><thead><tr><th>模型</th><th>Avg</th>';
@@ -1486,13 +1534,14 @@ function renderLeaderboard(){
       const mc=items.find(e=>e.model_key===mk);
       const modelLabel=mc?mc.model_name:mk;
       html+='<tr><td>'+escapeHtml(modelLabel)+'</td>';
-      html+='<td><b>'+(modelAvgs[mk]||0).toFixed(1)+'%</b></td>';
+      html+='<td><b>'+(modelAvgs[mk]==null?'\u2014':modelAvgs[mk].toFixed(1)+'%')+'</b></td>';
       benches.forEach(b=>{
         const bid=b.split(':')[0];
         const e=items.find(x=>x.model_key===mk&&x.bench_id===bid);
         if(e){
-          const isBest=(e.accuracy||0)===benchBest[bid]&&e.accuracy>0;
-          html+='<td'+(isBest?' class="best"':'')+'>'+(e.accuracy||0).toFixed(1)+'%</td>';
+          const acc=Number.isFinite(e.accuracy)?e.accuracy:null;
+          const isBest=acc!=null&&acc===benchBest[bid]&&acc>0;
+          html+='<td'+(isBest?' class="best"':'')+'>'+(acc==null?'\u2014':acc.toFixed(1)+'%')+'</td>';
         }else{
           html+='<td>-</td>';
         }

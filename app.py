@@ -674,6 +674,8 @@ async def eval_list_benches() -> list[dict[str, Any]]:
             "language": b.language,
             "split": b.split,
             "description": b.description,
+            "format": b.format,
+            "scorable": b.scorable,
             "data_file": str(b.data_file),
             "exists": Path(b.data_file).exists(),
         })
@@ -774,12 +776,132 @@ async def eval_stop_run(run_id: str):
 
 @app.get("/api/eval/run/{run_id}/progress")
 async def eval_get_progress(run_id: str):
-    """Get current progress snapshot (for restoring UI after refresh)."""
+    """Get current progress snapshot.
+
+    For active runs, read from the runner's in-memory progress dict.
+    For interrupted runs (server restarted), reconstruct from disk by
+    counting entries in each results JSON file.
+    """
+    # Active run -- read from memory
     entry = _eval_runs.get(run_id)
-    if entry is None:
+    if entry is not None:
+        runner: EvalRunner = entry["runner"]
+        return {"run_id": run_id, "progress": runner.get_progress()}
+
+    # Interrupted run -- reconstruct from disk
+    output_dir = Path(__file__).resolve().parent / "eval" / "output" / run_id
+    if not output_dir.exists():
         raise HTTPException(404, f"Unknown run: {run_id}")
-    runner: EvalRunner = entry["runner"]
-    return {"run_id": run_id, "progress": runner.get_progress()}
+
+    # Read config to know model_keys and bench_ids
+    config_file = output_dir / "config.json"
+    if not config_file.exists():
+        raise HTTPException(404, f"No config for run: {run_id}")
+    config = json.loads(config_file.read_text(encoding="utf-8"))
+    model_keys = config.get("model_keys", [])
+    bench_ids = config.get("bench_ids", [])
+    mode = config.get("mode", "cot")
+
+    # Look up bench names and totals from the registry
+    from eval.benches import get_bench
+    from eval.common import load_jsonl
+
+    progress = {}
+    for mk in model_keys:
+        mc = _cfg().MODELS.get(mk, {})
+        model_short = mc.get("served_model_name", mk).split("/")[-1]
+        for bid in bench_ids:
+            bench = get_bench(bid)
+            bench_name = bench.name if bench else bid
+            total = 0
+            if bench and Path(bench.data_file).exists():
+                total = len(load_jsonl(bench.data_file))
+
+            # Count completed questions from the results file
+            results_file = output_dir / f"{model_short}__{bid}__{mode}.json"
+            done = 0
+            correct = 0
+            if results_file.exists():
+                try:
+                    results = json.loads(results_file.read_text(encoding="utf-8"))
+                    # deduplicate by realidx
+                    seen_ids = set()
+                    unique = []
+                    for r in results:
+                        rid = r.get("realidx")
+                        if rid not in seen_ids:
+                            seen_ids.add(rid)
+                            unique.append(r)
+                    done = len(unique)
+                    correct = sum(1 for r in unique if r.get("correct") is True)
+                except (json.JSONDecodeError, Exception):
+                    # results file may be corrupted (interrupted write)
+                    # fall back to counting progress file entries
+                    import re
+                    pf = output_dir / f"progress_{model_short}_{bid}_{mode}.txt"
+                    if pf.exists():
+                        done = len(set(int(x) for x in pf.read_text().split() if x.isdigit()))
+                    else:
+                        done = 0
+                    correct = 0
+
+            if bench is not None and not bench.scorable:
+                acc = None
+            else:
+                acc = round(correct / done * 100, 1) if done > 0 else 0
+            key = f"{mk}|{bid}"
+            progress[key] = {
+                "model_key": mk,
+                "bench_id": bid,
+                "bench_name": bench_name,
+                "total": total,
+                "done": done,
+                "correct": correct,
+                "accuracy": acc,
+                "status": "done" if (total > 0 and done >= total) else "interrupted",
+            }
+    return {"run_id": run_id, "progress": progress}
+
+
+@app.post("/api/eval/run/{run_id}/resume")
+async def eval_resume_run(run_id: str):
+    """Resume an interrupted run -- reuses the same run_id so progress
+    files and partial results are picked up automatically."""
+    safe = Path(run_id).name
+    if safe != run_id:
+        raise HTTPException(404, f"Unknown run: {run_id}")
+    output_dir = Path(__file__).resolve().parent / "eval" / "output" / run_id
+    config_file = output_dir / "config.json"
+    if not config_file.exists():
+        raise HTTPException(404, f"Run not found: {run_id}")
+    if run_id in _eval_runs and _eval_runs[run_id]["status"] == "running":
+        raise HTTPException(400, "Run is already active")
+
+    config = json.loads(config_file.read_text(encoding="utf-8"))
+    runner = EvalRunner(
+        run_id=run_id,
+        model_keys=config["model_keys"],
+        bench_ids=config["bench_ids"],
+        mode=config.get("mode", "cot"),
+        workers=config.get("workers", 10),
+        limit=config.get("limit", 0),
+        no_resume=False,
+    )
+    # Initialize progress from disk BEFORE putting in _eval_runs,
+    # so the GET /progress endpoint returns correct data immediately
+    runner._init_progress_from_disk()
+    _eval_runs[run_id] = {"runner": runner, "status": "running"}
+
+    def _run():
+        try:
+            runner.run()
+            _eval_runs[run_id]["status"] = "completed"
+        except Exception as e:
+            _eval_runs[run_id]["status"] = f"error: {e}"
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+    return {"ok": True, "run_id": run_id}
 
 
 @app.get("/api/eval/runs")
@@ -821,9 +943,21 @@ async def eval_get_run(run_id: str) -> dict[str, Any]:
         result["config"] = json.loads(config_file.read_text(encoding="utf-8"))
     summary_file = output_dir / "summary.json"
     if summary_file.exists():
-        result["summary"] = json.loads(summary_file.read_text(encoding="utf-8"))
-        result["status"] = "completed"
+        try:
+            result["summary"] = json.loads(summary_file.read_text(encoding="utf-8"))
+            result["status"] = result["summary"].get("status", "completed")
+        except (json.JSONDecodeError, OSError):
+            # Empty/corrupt summary (e.g. the final write failed when the
+            # disk was full) -- fall back to the no-summary path instead
+            # of returning a 500 that breaks the frontend.
+            result["summary_error"] = (
+                f"summary.json exists but is not readable "
+                f"({summary_file.stat().st_size} bytes)"
+            )
+            summary_file = None
     else:
+        summary_file = None
+    if summary_file is None:
         entry = _eval_runs.get(run_id)
         if entry:
             result["status"] = entry["status"]

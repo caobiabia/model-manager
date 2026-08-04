@@ -70,13 +70,30 @@ python app.py
 
 ### Bench 列表
 
-10 个 MedicalAgentsBench 数据集（`test_hard` split）+ 1 个自定义中文子集，共 11 个：
+10 个 MedicalAgentsBench 数据集（`test_hard` split）+ 1 个自定义中文子集 + 5 个通用 Bench：
 
 `medqa` `pubmedqa` `medmcqa` `mmlu` `mmlu-pro` `medbullets` `afrimedqa` `medexqa` `medxpertqa-r` `medxpertqa-u` `medqa_cn`
+
+通用 Bench（`eval/data_general/`，UI 中归入「通用 Bench」分组）：
+
+`mmlu_std`（标准 MMLU，57 科 14,042 题） `gsm8k`（GSM8K test，1,319 题，自由数字作答） `ceval`（C-Eval test，52 科 12,342 题） `gpqa_diamond`（GPQA Diamond，198 题） `aime2026`（AIME 2026，30 题，整数作答）
+
+数据由 `eval/prepare_general_benches.py` 从 HuggingFace 下载并转换为统一 JSONL 格式
+（默认走 hf-mirror.com，可用 `HF_ENDPOINT` 覆盖）。GSM8K 是自由作答 bench
+（`format="free"`），runner 用正则提取末尾数字并与标准答案精确匹配。GPQA / AIME 2026 /
+由 `eval/prepare_extra_benches.py` 下载转换（GPQA 原仓库在 HuggingFace 上需申请访问权限，
+脚本使用公开镜像的同一 Diamond 子集）。
+
+> SWE-bench Verified 暂缓接入：本环境没有 Docker，无法跑官方 harness 出分。`eval/benches.py`
+> 里保留了注册代码（已注释），等有 Docker 评测环境后取消注释、运行
+> `eval/prepare_extra_benches.py` 即可恢复；`eval/export_swebench_predictions.py` 用于把
+> 生成的 patch 导出成官方 harness 的 predictions 格式。
 
 ### 扩展
 
 在 `eval/benches.py` 末尾调用 `register(Bench(...))` 即可添加新 bench。只需提供 `id`、`name`、`data_file`、`language`，runner 自动处理其余逻辑。
+新增自由作答类 bench（如数学题）时设置 `format="free"`，并把标准答案写入记录的 `answer` 字段；
+新增补丁生成类 bench（如 SWE-bench）时设置 `format="patch"` 与 `scorable=False`。
 
 ### 使用
 

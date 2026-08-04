@@ -125,7 +125,12 @@ def call_model(
         else:
             kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": False}}
     else:  # cot
-        kwargs["max_tokens"] = max_tokens or 6000
+        # Thinking models (e.g. Qwen3.6) often burn >6k tokens on hard
+        # reasoning (AIME/GPQA). With max_tokens=6000 the response is
+        # truncated mid-reasoning: content stays empty and scoring falls
+        # back to garbage from the partial thinking trace. Keep 11000
+        # (vLLM servers here are launched with max-model-len=12000).
+        kwargs["max_tokens"] = max_tokens or 11000
         if is_deepseek:
             kwargs["reasoning_effort"] = "high"
             kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
@@ -155,12 +160,14 @@ def call_model(
 # -- answer extraction -----------------------------------------------------
 
 
-def extract_answer_regex(text: str, options: dict) -> str | None:
+def extract_answer_regex(text: str, options: dict, strict: bool = False) -> str | None:
     """Extract answer letter from text using regex.
 
     Handles JSON objects, Chinese answer patterns, bare single
-    letters, and English option-key search -- works for both
-    the English MedicalAgentsBench prompts and the Chinese subset.
+    letters, and English option-key search -- works for both the English
+    MedicalAgentsBench prompts and the Chinese subset. In *strict* mode
+    the loose English tail search is disabled, so a truncated thinking
+    trace cannot yield a bogus answer from a stray option letter.
     """
     if not text:
         return None
@@ -197,11 +204,106 @@ def extract_answer_regex(text: str, options: dict) -> str | None:
     if m:
         return m.group(1).upper()
 
-    # English fallback: search for option keys in the tail of the response
-    tail = text[-500:]
-    for key in options:
-        if re.search(rf"\b{re.escape(key)}\b", tail):
-            return key
+    # English fallback: search for option keys in the tail of the response.
+    if not strict:
+        tail = text[-500:]
+        for key in options:
+            if re.search(rf"\b{re.escape(key)}\b", tail):
+                return key
+    return None
+
+
+def _normalize_number(s: str) -> str:
+    """Normalize a numeric string for exact-match scoring (GSM8K-style)."""
+    s = s.replace(",", "").replace("$", "").replace("\uffe5", "").replace("\u00a5", "")
+    s = s.strip()
+    sign = ""
+    if s and s[0] in "+-":
+        sign, s = s[0], s[1:]
+    s = s.lstrip("0") or "0"
+    if s.endswith(".0") and s.count(".") == 1:
+        s = s[:-2]
+    return sign + s
+
+
+def extract_free_answer(text: str, strict: bool = False) -> str | None:
+    """Extract the final numeric answer (GSM8K-style) from a model response.
+
+    Checks, in order: the canonical ``#### <number>`` marker, explicit
+    answer labels (English/Chinese), a ``\\boxed{<number>}`` pattern (AIME
+    style), then the last number in the text. In *strict* mode only
+    explicit answer markers are accepted (no last-number fallback), so a
+    truncated reasoning trace cannot produce a bogus answer.
+    """
+    if not text:
+        return None
+    clean = re.sub(r"```(?:json)?\s*\n?", "", text)
+    clean = re.sub(r"```", "", clean).strip()
+
+    m = re.search(r"####\s*[$ \uffe5\u00a5]?\s*[+-]?\d[\d,]*(?:\.\d+)?", clean)
+    if m:
+        num = re.search(r"[+-]?\d[\d,]*(?:\.\d+)?", m.group(0))
+        if num:
+            return _normalize_number(num.group(0))
+
+    m = re.search(r"\\boxed\{\s*([+-]?\d[\d,]*(?:\.\d+)?)\s*\}", clean)
+    if m:
+        return _normalize_number(m.group(1))
+
+    for pat in (
+        r"(?:final\s+answer|answer)\s*[::\uff1a]?\s*[$ \uffe5\u00a5]?\s*[+-]?\d[\d,]*(?:\.\d+)?",
+        r"\u7b54\u6848\u662f\s*[::\uff1a]?\s*[$ \uffe5\u00a5]?\s*[+-]?\d[\d,]*(?:\.\d+)?",
+    ):
+        m = re.search(pat, clean, re.IGNORECASE)
+        if m:
+            num = re.search(r"[+-]?\d[\d,]*(?:\.\d+)?", m.group(0))
+            if num:
+                return _normalize_number(num.group(0))
+
+    if not strict:
+        nums = re.findall(r"[+-]?\d[\d,]*(?:\.\d+)?", clean)
+        if nums:
+            return _normalize_number(nums[-1])
+    return None
+
+
+_DIFF_LINE_RE = re.compile(
+    r"^(diff |index |--- |\+\+\+ |@@ |[ +\-@\\]|"
+    r"new file mode|deleted file mode|similarity index|"
+    r"rename from|rename to|copy from|copy to|Binary files?)"
+)
+
+
+def extract_patch(text: str) -> str | None:
+    """Extract a unified diff / code patch from a model response.
+
+    Prefers a fenced diff/patch/python block; otherwise finds the first
+    ``diff --git`` marker and keeps all diff-looking lines after it.
+    Returns ``None`` when no patch-like content is found.
+    """
+    if not text:
+        return None
+
+    # fenced blocks first
+    for block in re.findall(r"```[A-Za-z+-]*\s*\n(.*?)```", text, re.S):
+        block = block.strip()
+        if not block:
+            continue
+        if "diff --git" in block or "@@" in block or block.startswith("--- "):
+            return block
+
+    # raw unified diff: start at the first diff header
+    m = re.search(r"^diff --git .*$", text, re.M)
+    if m:
+        lines = text[m.start():].splitlines()
+        out: list[str] = []
+        for line in lines:
+            if _DIFF_LINE_RE.match(line) or line == r"\ No newline at end of file":
+                out.append(line)
+            elif out:
+                break
+        if out:
+            return "\n".join(out).strip()
     return None
 
 
@@ -212,6 +314,7 @@ def extract_answer(
     extract_model: str | None = None,
     is_deepseek: bool = False,
     retries: int = 3,
+    strict: bool = False,
 ) -> str | None:
     """Unified answer extraction: model-based -> regex fallback.
 
@@ -219,8 +322,13 @@ def extract_answer(
     ``{"answer": "<letter>"}`` and parse it. On any failure, fall back
     to :func:`extract_answer_regex`.
     """
-    if extract_client is None or not raw_response.strip():
-        return extract_answer_regex(raw_response, options)
+    # Fast path first: the deterministic regex extractor handles
+    # well-formatted answers. Only fall back to an LLM extraction call
+    # (which can hang/rate-limit and stalls the whole worker pool) when
+    # regex cannot find an answer.
+    regex_ans = extract_answer_regex(raw_response, options, strict=strict)
+    if regex_ans is not None or extract_client is None or not raw_response.strip():
+        return regex_ans
 
     options_list = ", ".join(options.keys())
     prompt = (
@@ -236,6 +344,7 @@ def extract_answer(
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.0,
                 max_tokens=128,
+                timeout=30,
             )
             if is_deepseek:
                 ekwargs["extra_body"] = {"thinking": {"type": "disabled"}}

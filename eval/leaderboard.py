@@ -44,6 +44,10 @@ def _bench_category(bench_id: str) -> str:
             return "full"
         if split.startswith("sampled10"):
             return "s10"
+        if split == "general":
+            return "general"
+        if split == "general_subset":
+            return "general_subset"
         return "subset"
     # fallback: infer from id
     if bench_id.endswith("_full"):
@@ -140,6 +144,8 @@ def get_leaderboard() -> dict[str, Any]:
     categories: dict[str, list[dict]] = {
         "hard": [],
         "full": [],
+        "general": [],
+        "general_subset": [],
         "s10": [],
         "subset": [],
     }
@@ -152,6 +158,8 @@ def get_leaderboard() -> dict[str, Any]:
         "categories": {
             "hard": "Hard (test_hard)",
             "full": "Test (test)",
+            "general": "\u901a\u7528 Bench (MMLU/GSM8K/C-Eval/GPQA/AIME)",
+            "general_subset": "\u901a\u7528\u5b50\u96c6 (MMLU/GSM8K/C-Eval)",
             "s10": "Sampled 10%",
             "subset": "MedQA \u4e2d\u6587\u5b50\u96c6",
         },
