@@ -1767,7 +1767,7 @@ async function loadEvalRuns(){
     await ensureEvalMeta();
     const runs=await(await fetch('/api/eval/runs')).json();
     if(!runs.length){panel.innerHTML='<div class="eval-empty"><i data-lucide="history"></i><div>暂无历史记录</div></div>';if(window.lucide)lucide.createIcons();return}
-    panel.innerHTML='<table class="eval-history-table"><thead><tr><th>Run ID</th><th>Mode</th><th>模型 / Bench</th><th>Status</th><th></th></tr></thead><tbody>'+
+    panel.innerHTML='<table class="eval-history-table"><thead><tr><th>Run ID</th><th>启动时间</th><th>Mode</th><th>模型 / Bench</th><th>Status</th><th></th></tr></thead><tbody>'+
       runs.map(r=>{
         const cfg=r.config||{};
         const summ=r.summary||{};
@@ -1780,16 +1780,18 @@ async function loadEvalRuns(){
         const benchDesc=(cfg.bench_ids||[]).map(id=>benchNameOf(id)||id).join('、');
         return '<tr onclick="showRunDetail(\''+r.run_id+'\')">'+
           '<td style="font-family:var(--font-mono);font-size:11px">'+escapeHtml(r.run_id)+'</td>'+
+          '<td style="font-family:var(--font-mono);font-size:11px;white-space:nowrap">'+escapeHtml((cfg.started_at||'-').replace('T',' ').slice(0,19))+'</td>'+
           '<td>'+escapeHtml(cfg.mode||'-')+'</td>'+
           '<td style="font-size:11px;line-height:1.5">'+
             (modelDesc?'<div style="color:var(--text);font-weight:500">'+escapeHtml(modelDesc)+'</div>':'')+
             (benchDesc?'<div style="color:var(--text-dim)">'+escapeHtml(benchDesc)+'</div>':'')+
           '</td>'+
           '<td><span class="status-pill '+statusClass+'">'+escapeHtml(status)+'</span></td>'+
-          '<td onclick="event.stopPropagation()" style="display:flex;gap:4px">'+
-          (canShowProgress?'<button class="btn btn-xs ghost" onclick="showEvalRun(\''+r.run_id+'\')" title="在实时进度中查看"><i data-lucide="activity"></i></button>':'')+
-          (canResume?'<button class="btn btn-xs primary" onclick="resumeRun(\''+r.run_id+'\')" title="\u7ee7\u7eed"><i data-lucide="play"></i></button>':'')+
-          '<button class="btn btn-xs danger" onclick="deleteRun(\''+r.run_id+'\')"><i data-lucide="trash-2"></i></button></td></tr>';
+          '<td onclick="event.stopPropagation()"><div style="display:flex;gap:4px">'+
+            (canShowProgress?'<button class="btn btn-xs ghost" onclick="showEvalRun(\''+r.run_id+'\')" title="在实时进度中查看"><i data-lucide="activity"></i></button>':'')+
+            (canResume?'<button class="btn btn-xs primary" onclick="resumeRun(\''+r.run_id+'\')" title="\u7ee7\u7eed"><i data-lucide="play"></i></button>':'')+
+            '<button class="btn btn-xs danger" onclick="deleteRun(\''+r.run_id+'\')"><i data-lucide="trash-2"></i></button>'+
+          '</div></td></tr>';
       }).join('')+
       '</tbody></table>';
   }catch(e){panel.innerHTML='Failed: '+escapeHtml(e)}
