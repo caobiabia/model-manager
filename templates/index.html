@@ -487,8 +487,8 @@ svg.lucide{flex-shrink:0;stroke-width:2}
 .preset-btn:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
 .preset-btn.active{border-color:var(--accent);background:var(--accent-soft);color:var(--accent);font-weight:600}
 
-.bench-groups{display:flex;flex-direction:column;gap:8px;overflow-y:auto;max-height:440px;padding-right:2px}
-.bench-group{border:1px solid var(--border);border-radius:var(--radius);background:var(--panel);overflow:hidden;transition:border-color var(--t-fast)}
+.bench-groups{display:flex;flex-direction:column;gap:8px}
+.bench-group{border:1px solid var(--border);border-radius:var(--radius);background:var(--panel);overflow:hidden;flex-shrink:0;transition:border-color var(--t-fast)}
 .bench-group:hover{border-color:var(--border-strong)}
 .bench-group[data-key="med_hard"]{--g-c:var(--accent);--g-soft:var(--accent-soft)}
 .bench-group[data-key="med_full"]{--g-c:var(--accent-strong);--g-soft:var(--accent-soft)}
