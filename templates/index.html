@@ -274,6 +274,19 @@ svg.lucide{flex-shrink:0;stroke-width:2}
 .model-row .info{flex:1;min-width:0}
 .model-row .name{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12.5px}
 .model-row .detail{font-size:10.5px;color:var(--text-dim);margin-top:2px;font-variant-numeric:tabular-nums}
+.model-row .detail .model-desc{
+  color:var(--text-dim);cursor:text;border-radius:var(--radius-xs);
+  padding:0 2px;margin:0 -2px;transition:color var(--t-fast),background var(--t-fast);
+}
+.model-row .detail .model-desc:hover{color:var(--text);background:var(--panel-hover)}
+.model-row .detail .model-desc.empty{color:var(--text-mute);opacity:.75}
+.model-row:hover .detail .model-desc.empty{opacity:1}
+.model-row .detail .model-desc-edit{
+  font:inherit;color:var(--text);background:var(--input-bg);
+  border:1px solid var(--accent);border-radius:var(--radius-xs);
+  padding:1px 5px;min-width:110px;max-width:210px;outline:none;
+  box-shadow:0 0 0 3px var(--accent-ring);font-variant-numeric:tabular-nums;
+}
 .model-row .actions{
   display:flex;gap:3px;align-items:center;flex-shrink:0;
   justify-content:flex-end;opacity:.7;transition:opacity var(--t-fast);
@@ -920,6 +933,7 @@ const $=id=>document.getElementById(id);
 function escapeHtml(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}
 let activeModel=null, launchingKey=null, logSource=null, streaming=false, gpusCache=[], selectedGpu=null;
 let allModels=[], modelQuery='', modelFilter='all', collapsedGroups=new Set();
+let editingDescKey=null, editingDescValue='';
 
 /* ── Theme ── */
 function toggleTheme(){
@@ -1066,11 +1080,22 @@ function modelGroupOf(m){
   if(/Qwen3\.5-9B/i.test(m.display_name)||m.key.startsWith('qwen35_9b'))return 'Qwen3.5-9B';
   return '其他';
 }
+function shortModelName(m){
+  let s=m.display_name||m.key;
+  s=s.replace(/\s*[（(]\s*(?:原始|基模)\s*[)）]\s*/g,'');
+  const m2=s.match(/^(.+?)\s*[（(](.+)[)）]\s*$/);
+  if(m2){
+    const inner=m2[2].trim();
+    if(inner)return inner;
+    return m2[1].trim();
+  }
+  return s.trim();
+}
 function modelMatchesQuery(m){
   if(!modelQuery)return true;
   const q=modelQuery.replace(/\s+/g,'');
   const gpuStr=m.gpu!=null?('gpu'+m.gpu+' GPU'+m.gpu):'';
-  const hay=[m.display_name,m.key,m.served_model_name,String(m.port||''),gpuStr,modelGroupOf(m)].join(' ').toLowerCase().replace(/\s+/g,'');
+  const hay=[m.display_name,m.description,m.key,m.served_model_name,String(m.port||''),gpuStr,modelGroupOf(m)].join(' ').toLowerCase().replace(/\s+/g,'');
   return hay.includes(q);
 }
 function modelMatchesFilter(m){
@@ -1107,7 +1132,7 @@ function makeModelRow(m){
   if(isLoading)dot.title='启动中...';
   row.appendChild(dot);
   const info=document.createElement('div'); info.className='info';
-  const name=document.createElement('div'); name.className='name'; name.textContent=m.display_name;
+  const name=document.createElement('div'); name.className='name'; name.textContent=shortModelName(m);
   name.title=m.display_name;
   const detail=document.createElement('div'); detail.className='detail';
   const parts=[];
@@ -1116,7 +1141,27 @@ function makeModelRow(m){
   if(isLoading)parts.push('[启动中]');
   else if(m.running&&!m.pid)parts.push('[外部检测]');
   if(m.pid&&m.running)parts.push('pid='+m.pid);
-  detail.textContent=parts.join(' · ');
+  parts.forEach((p,i)=>{if(i)detail.append(' · ');detail.append(p)});
+  if(parts.length)detail.append(' · ');
+  if(editingDescKey===m.key){
+    const input=document.createElement('input');
+    input.id='modelDescInput'; input.className='model-desc-edit';
+    input.value=editingDescValue||'';
+    input.placeholder='中文描述';
+    input.onkeydown=e=>{
+      if(e.key==='Enter'){e.preventDefault();saveModelDescription(m.key);}
+      else if(e.key==='Escape'){cancelEditDesc();}
+    };
+    input.onblur=()=>saveModelDescription(m.key);
+    detail.appendChild(input);
+  }else{
+    const desc=document.createElement('span');
+    desc.className='model-desc'+(m.description?'':' empty');
+    desc.textContent=m.description||'添加描述';
+    desc.title='点击编辑中文描述';
+    desc.onclick=e=>{e.stopPropagation();startEditDesc(m.key,m.description||'');};
+    detail.appendChild(desc);
+  }
   info.appendChild(name); info.appendChild(detail);
   row.appendChild(info);
   const act=document.createElement('div'); act.className='actions';
@@ -1188,6 +1233,12 @@ function renderModelList(){
     });
   }
   if(window.lucide)lucide.createIcons({root:list});
+  if(editingDescKey){
+    requestAnimationFrame(()=>{
+      const input=$('modelDescInput');
+      if(input)input.focus();
+    });
+  }
 }
 function renderModels(models){
   allModels=models;
@@ -1215,6 +1266,37 @@ function toggleModelGroup(name){
   if(collapsedGroups.has(name))collapsedGroups.delete(name);
   else collapsedGroups.add(name);
   renderModelList();
+}
+function startEditDesc(key,current){
+  editingDescKey=key;
+  editingDescValue=current||'';
+  renderModelList();
+  requestAnimationFrame(()=>{
+    const input=$('modelDescInput');
+    if(input){input.focus();input.select();}
+  });
+}
+function cancelEditDesc(){
+  editingDescKey=null;
+  renderModelList();
+}
+async function saveModelDescription(key){
+  if(editingDescKey!==key)return;
+  const input=$('modelDescInput');
+  const value=input?input.value:'';
+  editingDescKey=null;
+  const target=allModels.find(m=>m.key===key);
+  if(target)target.description=value.trim();
+  renderModelList();
+  try{
+    const r=await fetch('/api/model-descriptions/'+encodeURIComponent(key),{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({description:value}),
+    });
+    const d=await r.json();
+    if(!r.ok)alert('保存失败: '+(d.detail||JSON.stringify(d)));
+  }catch(e){alert('保存失败: '+e)}
+  refreshModels();
 }
 function updateChatSelect(models){
   let sel=$('chatModel'),cur=sel.value;

@@ -29,6 +29,7 @@ import model_config  # noqa: E402   # type: ignore[import-untyped]
 
 APP_DIR = Path(__file__).resolve().parent
 VENV_PYTHON = str(_workspace / ".venv" / "bin" / "python")
+DESCRIPTION_FILE = APP_DIR / "model_descriptions.json"
 
 
 def _cfg():
@@ -38,6 +39,36 @@ def _cfg():
     importlib.reload(model_config)
     return model_config
 
+
+def _load_descriptions() -> dict[str, str]:
+    """Load per-model Chinese descriptions (kept outside shared model_config)."""
+    try:
+        if DESCRIPTION_FILE.exists():
+            data = json.loads(DESCRIPTION_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return {str(k): str(v).strip() for k, v in data.items() if str(v).strip()}
+    except Exception:
+        pass
+    return {}
+
+
+def _save_description(key: str, description: str) -> None:
+    """Persist one model description atomically in the dev worktree."""
+    with _desc_lock:
+        data = _load_descriptions()
+        description = description.strip()
+        if description:
+            data[key] = description
+        else:
+            data.pop(key, None)
+        tmp = DESCRIPTION_FILE.with_suffix(".json.tmp")
+        tmp.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(tmp, DESCRIPTION_FILE)
+
+
 app = FastAPI(title="CSP Model Manager")
 
 _procs: dict[str, subprocess.Popen] = {}
@@ -46,6 +77,7 @@ _start_times: dict[str, str] = {}
 _log_history: dict[str, list[str]] = {}  # accumulated log lines
 _locks: dict[str, asyncio.Lock] = {}     # per-model lock for launch / stop
 _thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=8)
+_desc_lock = threading.Lock()
 
 
 # ——— port / GPU scanning ————
@@ -233,6 +265,10 @@ class LaunchRequest(BaseModel):
     enforce_eager: bool = False
 
 
+class DescriptionUpdate(BaseModel):
+    description: str = ""
+
+
 class ChatMessage(BaseModel):
     role: str
     content: str
@@ -388,6 +424,7 @@ async def list_models() -> list[dict[str, Any]]:
     for key in probe_futures:
         probe_futures[key] = await probe_futures[key]
 
+    descriptions = _load_descriptions()
     result: list[dict[str, Any]] = []
     for key in sorted(_cfg().MODELS.keys()):
         cfg = _cfg().MODELS[key]
@@ -404,6 +441,7 @@ async def list_models() -> list[dict[str, Any]]:
             "port": cfg.get("port"),
             "gpu": cfg.get("gpu"),
             "running": alive,
+            "description": descriptions.get(key, ""),
         }
         if cfg.get("lora_path"):
             entry["lora_path"] = cfg["lora_path"]
@@ -417,6 +455,20 @@ async def list_models() -> list[dict[str, Any]]:
             entry["started_at"] = _start_times.get(key, "")
         result.append(entry)
     return result
+
+
+@app.get("/api/model-descriptions")
+async def get_model_descriptions() -> dict[str, str]:
+    return _load_descriptions()
+
+
+@app.post("/api/model-descriptions/{model_key}")
+async def update_model_description(model_key: str, body: DescriptionUpdate) -> dict[str, Any]:
+    if model_key not in _cfg().MODELS:
+        raise HTTPException(404, f"Unknown model: {model_key}")
+    description = body.description.strip()
+    _save_description(model_key, description)
+    return {"ok": True, "key": model_key, "description": description}
 
 
 # ——— launch ————
