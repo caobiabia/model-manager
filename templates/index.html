@@ -42,6 +42,10 @@ html{height:100%;overflow:hidden}
   --red-soft:hsla(0,72%,62%,.12);
   --amber:hsl(38,82%,54%);
   --amber-soft:hsla(38,82%,54%,.12);
+  --violet:hsl(265,70%,66%);
+  --violet-soft:hsla(265,70%,66%,.14);
+  --pink:hsl(330,72%,64%);
+  --pink-soft:hsla(330,72%,64%,.14);
   --bubble-user:hsl(217,76%,52%);
   --bubble-user-2:hsl(217,80%,46%);
   --bubble-assistant:hsl(222,16%,14%);
@@ -73,6 +77,10 @@ html{height:100%;overflow:hidden}
   --red-soft:hsla(0,70%,48%,.1);
   --amber:hsl(38,80%,42%);
   --amber-soft:hsla(38,80%,42%,.12);
+  --violet:hsl(265,68%,52%);
+  --violet-soft:hsla(265,68%,52%,.1);
+  --pink:hsl(330,70%,48%);
+  --pink-soft:hsla(330,70%,48%,.1);
   --bubble-user:hsl(217,76%,50%);
   --bubble-user-2:hsl(217,80%,44%);
   --bubble-assistant:hsl(220,14%,94%);
@@ -441,33 +449,86 @@ svg.lucide{flex-shrink:0;stroke-width:2}
 .eval-section h3{font-size:13px;font-weight:600;color:var(--text);display:flex;align-items:center;gap:8px;margin-bottom:14px}
 .eval-section h3 svg.lucide{width:16px;height:16px;color:var(--accent)}
 
-.eval-config-row{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;margin-bottom:14px}
-.eval-field{display:flex;flex-direction:column;gap:5px}
-.eval-field>label{font-size:11px;color:var(--text-dim);font-weight:500}
-.eval-field select,.eval-field input[type=number]{background:var(--input-bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:5px 8px;color:var(--text);font-size:12px;font-family:var(--font);min-width:80px}
-.eval-field input[type=number]{width:60px}
+/* ── Eval config: side settings + bench picker ── */
+.eval-config{display:grid;grid-template-columns:minmax(240px,280px) 1fr;gap:14px}
+@media (max-width:1180px){.eval-config{grid-template-columns:1fr}}
+.eval-config-side{display:flex;flex-direction:column;gap:12px;background:var(--panel-2);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px;min-width:0}
+.eval-field{display:flex;flex-direction:column;gap:5px;min-width:0}
+.eval-field>label{font-size:11px;color:var(--text-dim);font-weight:600;letter-spacing:.02em;display:flex;align-items:center;gap:5px}
+.eval-field>label svg.lucide{width:13px;height:13px;color:var(--text-mute)}
+.eval-field select,.eval-field input[type=number]{background:var(--input-bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:7px 9px;color:var(--text);font-size:12px;font-family:var(--font);min-width:0;width:100%;transition:border-color var(--t-fast),box-shadow var(--t-fast)}
+.eval-field select:focus,.eval-field input[type=number]:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-ring)}
+.eval-fields-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.eval-fields-grid .eval-field{min-width:0}
+.eval-fields-grid .eval-field input{width:100%}
 
-.mode-toggle{display:inline-flex;background:var(--panel-2);border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden}
-.mode-toggle button{padding:5px 12px;border:none;background:transparent;color:var(--text-dim);font-size:11px;font-weight:500;cursor:pointer;transition:all var(--t-fast);font-family:var(--font)}
-.mode-toggle button.active{background:var(--accent);color:#fff}
-.mode-toggle button:hover:not(.active){color:var(--text)}
+.mode-toggle{display:grid;grid-template-columns:1fr 1fr;gap:3px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:3px;overflow:hidden}
+.mode-toggle button{padding:6px 10px;border:none;background:transparent;color:var(--text-dim);font-size:11px;font-weight:600;cursor:pointer;transition:all var(--t-fast);border-radius:calc(var(--radius-sm) - 2px);font-family:var(--font)}
+.mode-toggle button.active{background:var(--accent);color:#fff;box-shadow:var(--shadow-sm)}
+.mode-toggle button:hover:not(.active){color:var(--text);background:var(--panel-hover)}
 
-.bench-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-bottom:12px}
-.bench-group-header{grid-column:1/-1;display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border);cursor:pointer;user-select:none}
-.bench-group-header:hover{background:var(--panel-hover)}
-.bench-group-header .glabel{font-size:11px;font-weight:600;color:var(--text-dim);flex:1}
-.bench-group-header .chevron{width:14px;height:14px;color:var(--text-mute);transition:transform var(--t);flex-shrink:0}
-.bench-group-header.collapsed .chevron{transform:rotate(-90deg)}
-.bench-group-header .grp-btn{font-size:10px;padding:2px 6px;border:none;background:transparent;color:var(--text-mute);cursor:pointer;border-radius:var(--radius-xs)}
-.bench-group-header .grp-btn:hover{color:var(--accent)}
-.bench-group-body{grid-column:1/-1;display:contents}
+.eval-side-actions{display:flex;flex-direction:column;gap:8px;margin-top:12px;padding-top:12px;border-top:1px dashed var(--border)}
+.eval-side-actions .btn{width:100%}
+
+.bench-picker{display:flex;flex-direction:column;background:var(--panel-2);border:1px solid var(--border);border-radius:var(--radius-lg);padding:12px;min-width:0}
+.bench-picker-top{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+.bench-search{position:relative;flex:1;min-width:180px}
+.bench-search svg.lucide{position:absolute;left:9px;top:50%;transform:translateY(-50%);width:14px;height:14px;color:var(--text-mute);pointer-events:none}
+.bench-search input{width:100%;padding:7px 10px 7px 30px;background:var(--input-bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:12px;font-family:var(--font);transition:border-color var(--t-fast),box-shadow var(--t-fast)}
+.bench-search input::placeholder{color:var(--text-mute)}
+.bench-search input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-ring)}
+.bench-picker-actions{display:flex;align-items:center;gap:6px}
+.bench-sel-badge{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:500;color:var(--text-dim);background:var(--panel);border:1px solid var(--border);border-radius:999px;padding:5px 11px;white-space:nowrap;font-family:var(--font)}
+.bench-sel-badge b{color:var(--accent);font-family:var(--font-mono);font-weight:700}
+
+.bench-presets{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+.preset-btn{display:inline-flex;align-items:center;gap:5px;padding:4px 11px;border:1px solid var(--border);border-radius:999px;background:var(--panel);color:var(--text-dim);font-size:11px;font-weight:500;cursor:pointer;transition:all var(--t-fast);font-family:var(--font);line-height:1.4}
+.preset-btn svg.lucide{width:12px;height:12px}
+.preset-btn:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+.preset-btn.active{border-color:var(--accent);background:var(--accent-soft);color:var(--accent);font-weight:600}
+
+.bench-groups{display:flex;flex-direction:column;gap:8px;overflow-y:auto;max-height:440px;padding-right:2px}
+.bench-group{border:1px solid var(--border);border-radius:var(--radius);background:var(--panel);overflow:hidden;transition:border-color var(--t-fast)}
+.bench-group:hover{border-color:var(--border-strong)}
+.bench-group[data-key="med_hard"]{--g-c:var(--accent);--g-soft:var(--accent-soft)}
+.bench-group[data-key="med_full"]{--g-c:var(--accent-strong);--g-soft:var(--accent-soft)}
+.bench-group[data-key="general"]{--g-c:var(--green);--g-soft:var(--green-soft)}
+.bench-group[data-key="general_subset"]{--g-c:var(--amber);--g-soft:var(--amber-soft)}
+.bench-group[data-key="s10"]{--g-c:var(--violet);--g-soft:var(--violet-soft)}
+.bench-group[data-key="subset"]{--g-c:var(--pink);--g-soft:var(--pink-soft)}
+.bench-group.bench-group-hidden{display:none}
+.bench-group-head{display:flex;align-items:center;gap:8px;padding:8px 10px;cursor:pointer;user-select:none;transition:background var(--t-fast)}
+.bench-group-head:hover{background:var(--panel-hover)}
+.bench-group-head .g-chev{width:14px;height:14px;color:var(--text-mute);transition:transform var(--t);flex-shrink:0}
+.bench-group.collapsed .g-chev{transform:rotate(-90deg)}
+.bench-group-head .g-icon{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:var(--radius-sm);background:var(--g-soft);color:var(--g-c);flex-shrink:0}
+.bench-group-head .g-icon svg.lucide{width:13px;height:13px}
+.bench-group-head .g-name{font-size:12px;font-weight:600;color:var(--text);white-space:nowrap;flex-shrink:0}
+.bench-group-head .g-meta{font-size:10.5px;color:var(--text-mute);flex:1;min-width:0;margin-left:auto;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bench-group-head .g-count{display:inline-flex;align-items:center;justify-content:center;min-width:21px;height:21px;padding:0 7px;border-radius:999px;background:var(--g-soft);color:var(--g-c);font-size:10.5px;font-weight:700;font-family:var(--font-mono);flex-shrink:0}
+.bench-group-head .g-btn{font-size:10.5px;padding:3px 7px;border:none;background:transparent;color:var(--text-mute);cursor:pointer;border-radius:var(--radius-xs);font-family:var(--font);font-weight:500;flex-shrink:0;transition:color var(--t-fast),background var(--t-fast)}
+.bench-group-head .g-btn:hover{color:var(--g-c);background:var(--g-soft)}
+.bench-group-body{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:6px;padding:8px 10px 10px;border-top:1px solid var(--border)}
+.bench-group.collapsed .bench-group-body{display:none}
 .bench-group-body.hidden{display:none}
-.bench-chip{display:flex;align-items:center;gap:6px;padding:7px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--panel-2);color:var(--text-dim);font-size:12px;cursor:pointer;transition:all var(--t-fast);user-select:none}
-.bench-chip:hover{border-color:var(--border-strong);color:var(--text)}
-.bench-chip.active{border-color:var(--accent);background:var(--accent-soft);color:var(--accent);font-weight:500}
-.bench-chip svg.lucide{width:14px;height:14px;flex-shrink:0}
-.bench-chip .lang-tag{margin-left:auto;font-size:10px;color:var(--text-mute);font-weight:400}
-.bench-chip.active .lang-tag{color:var(--accent)}
+
+.bench-card{display:flex;align-items:center;gap:7px;padding:8px 9px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--panel-2);color:var(--text-dim);font-size:12px;cursor:pointer;transition:all var(--t-fast);user-select:none;position:relative}
+.bench-card:hover{border-color:var(--border-strong);color:var(--text);transform:translateY(-1px);box-shadow:var(--shadow-sm)}
+.bench-card.active{border-color:var(--g-c);background:var(--g-soft);color:var(--text)}
+.bench-card.active:hover{box-shadow:0 3px 10px hsla(0,0%,0%,.08)}
+.bench-card .bc-check{width:14px;height:14px;color:var(--text-mute);flex-shrink:0;transition:color var(--t-fast)}
+.bench-card.active .bc-check{color:var(--g-c)}
+.bench-card .bc-name{flex:1;min-width:0;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bench-card.active .bc-name{color:var(--text);font-weight:600}
+.bench-card .bc-tags{display:flex;gap:3px;flex-shrink:0}
+.bench-card .tag{font-size:9px;font-weight:700;letter-spacing:.03em;padding:2px 5px;border-radius:4px;background:var(--panel);border:1px solid var(--border);color:var(--text-mute);line-height:1;white-space:nowrap}
+.bench-card .tag.lang-zh{color:var(--red)}
+.bench-card .tag.fmt-free{color:var(--amber)}
+.bench-card .tag.fmt-mcq{color:var(--green)}
+.bench-card .tag.missing{color:var(--red);border-color:var(--red-soft);background:var(--red-soft)}
+.bench-card.bench-hidden{display:none}
+.bench-card.unavailable{opacity:.55;cursor:not-allowed;border-style:dashed;background:var(--panel)}
+.bench-card.unavailable:hover{transform:none;box-shadow:none;border-color:var(--red-soft);color:var(--text-dim)}
 
 .model-dropdown{position:relative}
 .model-check-list{position:absolute;z-index:100;top:100%;left:0;min-width:280px;max-height:300px;overflow-y:auto;border:1px solid var(--border-strong);border-radius:var(--radius);padding:4px;background:var(--panel);box-shadow:var(--shadow-md);margin-top:2px}
@@ -478,7 +539,8 @@ svg.lucide{flex-shrink:0;stroke-width:2}
 .model-check-item .mc-status{margin-left:auto;font-size:10px}
 .model-check-item.running .mc-name{color:var(--green)}
 
-.eval-actions{display:flex;gap:10px;align-items:center;margin-top:8px}
+.eval-section-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:14px}
+.eval-section-head h3{margin-bottom:0}
 
 .eval-progress-table{width:100%;border-collapse:collapse;font-size:12px}
 .eval-progress-table th{text-align:left;padding:6px 8px;color:var(--text-dim);font-weight:500;border-bottom:1px solid var(--border);font-size:11px}
@@ -587,38 +649,47 @@ svg.lucide{flex-shrink:0;stroke-width:2}
     <div class="eval-panel">
       <div class="eval-section">
         <h3><i data-lucide="settings-2"></i>测评配置</h3>
-        <div class="eval-config-row">
-          <div class="eval-field model-dropdown">
-            <label>模型</label>
-            <button class="btn" onclick="toggleModelDropdown()" id="evalModelBtn"><i data-lucide="box"></i><span>选择模型</span></button>
-            <div class="model-check-list" id="evalModelList" style="display:none"></div>
-          </div>
-          <div class="eval-field">
-            <label>模式</label>
-            <div class="mode-toggle" id="evalModeToggle">
-              <button class="active" data-mode="cot" onclick="setEvalMode('cot')">CoT</button>
-              <button data-mode="zero_shot" onclick="setEvalMode('zero_shot')">Zero-Shot</button>
+        <div class="eval-config">
+          <div class="eval-config-side">
+            <div class="eval-field model-dropdown">
+              <label><i data-lucide="box"></i>模型</label>
+              <button class="btn" onclick="toggleModelDropdown()" id="evalModelBtn"><i data-lucide="chevrons-up-down"></i><span>选择模型</span></button>
+              <div class="model-check-list" id="evalModelList" style="display:none"></div>
+            </div>
+            <div class="eval-field">
+              <label><i data-lucide="brain-circuit"></i>模式</label>
+              <div class="mode-toggle" id="evalModeToggle">
+                <button class="active" data-mode="cot" onclick="setEvalMode('cot')">CoT</button>
+                <button data-mode="zero_shot" onclick="setEvalMode('zero_shot')">Zero-Shot</button>
+              </div>
+            </div>
+            <div class="eval-fields-grid">
+              <div class="eval-field">
+                <label><i data-lucide="list-checks"></i>并发线程</label>
+                <input type="number" id="evalWorkers" value="50" min="1" max="200">
+              </div>
+              <div class="eval-field">
+                <label><i data-lucide="hash"></i>限制题数</label>
+                <input type="number" id="evalLimit" value="0" min="0" max="10000" title="0 = 全部题目">
+              </div>
+            </div>
+            <div class="eval-side-actions">
+              <button class="btn primary" id="evalRunBtn" onclick="startEval()"><i data-lucide="play"></i>开始测评</button>
+              <button class="btn danger" id="evalStopBtn" onclick="stopEval()" style="display:none"><i data-lucide="square"></i>停止测评</button>
             </div>
           </div>
-          <div class="eval-field">
-            <label>并发线程</label>
-            <input type="number" id="evalWorkers" value="50" min="1" max="200">
+          <div class="bench-picker">
+            <div class="bench-picker-top">
+              <div class="bench-search"><i data-lucide="search"></i><input id="benchSearch" placeholder="搜索 Bench（名称 / 描述 / 分类）" oninput="filterBenches()"></div>
+              <div class="bench-picker-actions">
+                <span class="bench-sel-badge" id="benchSelBadge">已选 <b>0</b> / 0</span>
+                <button class="btn btn-xs ghost" onclick="selectAllBenches(true)" title="选择全部 Bench"><i data-lucide="check-check"></i>全选</button>
+                <button class="btn btn-xs ghost" onclick="selectAllBenches(false)" title="清空选择"><i data-lucide="x"></i>清空</button>
+              </div>
+            </div>
+            <div class="bench-presets" id="benchPresets"></div>
+            <div class="bench-groups" id="evalBenchGrid"></div>
           </div>
-          <div class="eval-field">
-            <label>限制题数 (0=全部)</label>
-            <input type="number" id="evalLimit" value="0" min="0" max="10000">
-          </div>
-        </div>
-        <div class="eval-config-row">
-          <div class="eval-field" style="flex:1;min-width:100%">
-            <label>选择 Bench <button class="btn btn-xs ghost" onclick="selectAllBenches(true)" style="margin-left:8px">全选</button><button class="btn btn-xs ghost" onclick="selectAllBenches(false)" style="margin-left:4px">清空</button></label>
-            <div class="bench-grid" id="evalBenchGrid"></div>
-          </div>
-        </div>
-        <div class="eval-actions">
-          <button class="btn primary" id="evalRunBtn" onclick="startEval()"><i data-lucide="play"></i>开始测评</button>
-          <button class="btn danger" id="evalStopBtn" onclick="stopEval()" style="display:none"><i data-lucide="square"></i>停止</button>
-          <button class="btn ghost" onclick="loadEvalRuns()"><i data-lucide="refresh-cw"></i>刷新历史</button>
         </div>
       </div>
       <div class="eval-section">
@@ -628,7 +699,10 @@ svg.lucide{flex-shrink:0;stroke-width:2}
         </div>
       </div>
       <div class="eval-section">
-        <h3><i data-lucide="history"></i>历史记录</h3>
+        <div class="eval-section-head">
+          <h3><i data-lucide="history"></i>历史记录</h3>
+          <button class="btn btn-xs ghost" onclick="loadEvalRuns()"><i data-lucide="refresh-cw"></i>刷新</button>
+        </div>
         <div id="evalHistory">
           <div class="eval-empty"><i data-lucide="history"></i><div>尚无历史记录</div></div>
         </div>
@@ -1088,82 +1162,185 @@ async function loadEvalBenches(){
 
 function renderBenchGrid(){
   const grid=$('evalBenchGrid'); grid.innerHTML='';
-  const groups={'hard':[],'full':[],'general':[],'s10':[],'subset':[]};
+  const groupDefs=[
+    {key:'med_hard',icon:'activity',name:'医疗 Bench · Hard',meta:'test_hard · 高难子集',collapsed:false},
+    {key:'med_full',icon:'layers',name:'医疗 Bench · 全量',meta:'test · 全量测试集',collapsed:true},
+    {key:'general',icon:'globe',name:'通用 Bench',meta:'MMLU / GSM8K / C-Eval / GPQA / AIME',collapsed:false},
+    {key:'general_subset',icon:'filter',name:'通用 Bench · 1000 子集',meta:'基于历史测评的错误聚焦子集',collapsed:false},
+    {key:'s10',icon:'gauge',name:'采样 10%',meta:'EN + 中文 × hard / easy',collapsed:true},
+    {key:'subset',icon:'sliders-horizontal',name:'自定义子集',meta:'自定义数据',collapsed:false}
+  ];
+  const groups={};
+  groupDefs.forEach(g=>groups[g.key]=[]);
   evalBenches.forEach(b=>{
-    if(b.split==='test_hard')groups.hard.push(b);
-    else if(b.split==='test')groups.full.push(b);
+    if(b.split==='test_hard')groups.med_hard.push(b);
+    else if(b.split==='test')groups.med_full.push(b);
     else if(b.split==='general')groups.general.push(b);
-    else if(b.split==='general_subset')groups.general.push(b);
+    else if(b.split==='general_subset')groups.general_subset.push(b);
     else if(b.split&&b.split.startsWith('sampled10'))groups.s10.push(b);
     else groups.subset.push(b);
   });
-  const labels={
-    'hard':'\u5168\u91cf Hard (test_hard, 1251\u9898)',
-    'full':'\u5168\u91cf Test (test, 11636\u9898)',
-    'general':'\u901a\u7528 Bench (MMLU/GSM8K/C-Eval/GPQA/AIME)',
-    's10':'\u91c7\u6837 10% (EN+\u4e2d\u6587, hard+easy)',
-    'subset':'\u81ea\u5b9a\u4e49\u5b50\u96c6'
-  };
-  for(const[gk,label]of Object.entries(labels)){
-    const items=groups[gk];
-    if(!items.length)continue;
-    // collapsible header with per-group select-all / clear
+  // quick presets
+  const presets=[
+    {key:'all',icon:'check-check',name:'全部'},
+    {key:'med_hard',icon:'activity',name:'医疗 Hard'},
+    {key:'med_full',icon:'layers',name:'医疗全量'},
+    {key:'general',icon:'globe',name:'通用全量'},
+    {key:'general_subset',icon:'filter',name:'通用子集'},
+    {key:'s10',icon:'gauge',name:'采样 10%'},
+    {key:'subset',icon:'sliders-horizontal',name:'自定义'}
+  ];
+  const presetBox=$('benchPresets'); presetBox.innerHTML='';
+  presets.forEach(pr=>{
+    const b=document.createElement('button');
+    b.className='preset-btn';
+    b.dataset.preset=pr.key;
+    b.innerHTML='<i data-lucide="'+pr.icon+'"></i><span>'+escapeHtml(pr.name)+'</span>';
+    b.onclick=()=>applyBenchPreset(pr.key);
+    presetBox.appendChild(b);
+  });
+  groupDefs.forEach(g=>{
+    const items=groups[g.key];
+    if(!items.length)return;
+    const group=document.createElement('div');
+    group.className='bench-group'+(g.collapsed?' collapsed':'');
+    group.dataset.key=g.key;
     const hdr=document.createElement('div');
-    hdr.className='bench-group-header';
-    hdr.innerHTML='<i data-lucide="chevron-down" class="chevron"></i>'+
-      '<span class="glabel">'+escapeHtml(label)+' ('+items.length+')</span>'+
-      '<button class="grp-btn" onclick="event.stopPropagation();groupSelectBenches(\''+gk+'\',true)">\u5168\u9009</button>'+
-      '<button class="grp-btn" onclick="event.stopPropagation();groupSelectBenches(\''+gk+'\',false)">\u6e05\u7a7a</button>';
-    hdr.onclick=()=>{hdr.classList.toggle('collapsed');body.classList.toggle('hidden')};
-    grid.appendChild(hdr);
+    hdr.className='bench-group-head';
+    hdr.innerHTML='<i data-lucide="chevron-down" class="g-chev"></i>'+
+      '<span class="g-icon"><i data-lucide="'+g.icon+'"></i></span>'+
+      '<span class="g-name">'+escapeHtml(g.name)+'</span>'+
+      '<span class="g-count">'+items.length+'</span>'+
+      '<span class="g-meta">'+escapeHtml(g.meta)+'</span>'+
+      '<button class="g-btn" onclick="event.stopPropagation();groupSelectBenches(\''+g.key+'\',true)">全选</button>'+
+      '<button class="g-btn" onclick="event.stopPropagation();groupSelectBenches(\''+g.key+'\',false)">清空</button>';
+    hdr.onclick=()=>group.classList.toggle('collapsed');
+    group.appendChild(hdr);
     const body=document.createElement('div');
     body.className='bench-group-body';
-    body.dataset.group=gk;
-    if(gk==='s10'){
-      // group by dataset: one chip per dataset, selecting runs all 4 variants
+    if(g.key==='s10'){
+      // one card per dataset; selecting it runs all 4 variants (EN/ZH × hard/easy)
       const byDs={};
       items.forEach(b=>{
         const parts=b.id.split('_');
         const langIdx=parts.findIndex(p=>p==='en'||p==='zh');
         const ds=parts.slice(0,langIdx).join('_');
-        if(!byDs[ds])byDs[ds]={name:b.name.replace(/\s*\[s10-.*\]\s*/g,'').replace(/\s*\(\u4e2d\u6587\)\s*/g,'').trim(),ids:[]};
+        if(!byDs[ds])byDs[ds]={name:b.name.replace(/\s*\[s10-.*\]\s*/g,'').replace(/\s*\(中文\)\s*/g,'').trim(),ids:[]};
         byDs[ds].ids.push(b.id);
       });
       Object.keys(byDs).sort().forEach(ds=>{
         const info=byDs[ds];
-        const chip=document.createElement('div');
-        chip.className='bench-chip active';
-        chip.dataset.bench=info.ids.join(',');
-        chip.dataset.group=gk;
-        chip.innerHTML='<i data-lucide="check-circle-2"></i><span>'+escapeHtml(info.name)+' [s10]</span><span class="lang-tag">'+info.ids.length+'x</span>';
-        chip.onclick=()=>{chip.classList.toggle('active')};
-        body.appendChild(chip);
+        const card=document.createElement('div');
+        card.className='bench-card active';
+        card.dataset.bench=info.ids.join(',');
+        card.dataset.group=g.key;
+        card.dataset.name=(info.name+' 采样 s10').toLowerCase();
+        card.dataset.desc=(info.ids.join(',')+' '+g.name).toLowerCase();
+        card.title=info.ids.join(', ');
+        card.innerHTML='<i data-lucide="check-circle-2" class="bc-check"></i>'+
+          '<span class="bc-name">'+escapeHtml(info.name)+'</span>'+
+          '<span class="bc-tags"><span class="tag">'+info.ids.length+'x</span></span>';
+        card.onclick=()=>toggleBenchCard(card);
+        body.appendChild(card);
       });
     }else{
       items.forEach(b=>{
-        const chip=document.createElement('div');
-        chip.className='bench-chip active';
-        chip.dataset.bench=b.id;
-        chip.dataset.group=gk;
-        chip.innerHTML='<i data-lucide="check-circle-2"></i><span>'+escapeHtml(b.name)+'</span><span class="lang-tag">'+(b.language==='zh'?'ZH':'EN')+'</span>';
-        chip.onclick=()=>{chip.classList.toggle('active')};
-        body.appendChild(chip);
+        const unavailable=!b.exists;
+        const card=document.createElement('div');
+        card.className='bench-card'+(unavailable?' unavailable':' active');
+        card.dataset.bench=b.id;
+        card.dataset.group=g.key;
+        card.dataset.name=(b.name+' '+b.id).toLowerCase();
+        card.dataset.desc=((b.description||'')+' '+g.name).toLowerCase();
+        card.title=b.description||b.id;
+        const langCls=b.language==='zh'?'lang-zh':'';
+        const fmt=b.format==='free'?'free':'mcq';
+        const icon=unavailable?'x-circle':(b.format==='free'?'hash':'check-circle-2');
+        card.innerHTML='<i data-lucide="'+icon+'" class="bc-check"></i>'+
+          '<span class="bc-name">'+escapeHtml(b.name)+'</span>'+
+          '<span class="bc-tags">'+
+            '<span class="tag '+langCls+'">'+(b.language==='zh'?'ZH':'EN')+'</span>'+
+            '<span class="tag fmt-'+fmt+'">'+(b.format==='free'?'FREE':'MCQ')+'</span>'+
+            (unavailable?'<span class="tag missing">缺数据</span>':'')+
+          '</span>';
+        if(!unavailable)card.onclick=()=>toggleBenchCard(card);
+        body.appendChild(card);
       });
     }
-    grid.appendChild(body);
-  }
+    group.appendChild(body);
+    grid.appendChild(group);
+  });
+  updateBenchSummary();
   if(window.lucide)lucide.createIcons();
 }
 
-function groupSelectBenches(gk,sel){
-  document.querySelectorAll('#evalBenchGrid .bench-chip[data-group="'+gk+'"]').forEach(c=>{
-    if(sel)c.classList.add('active');else c.classList.remove('active');
-  });
+function toggleBenchCard(card){
+  card.classList.toggle('active');
+  const ic=card.querySelector('.bc-check');
+  if(ic)ic.setAttribute('data-lucide',card.classList.contains('active')?'check-circle-2':'circle');
+  if(window.lucide)lucide.createIcons();
+  clearPresetActive();
+  updateBenchSummary();
 }
 
+function groupSelectBenches(gk,sel){
+  document.querySelectorAll('#evalBenchGrid .bench-card[data-group="'+gk+'"]').forEach(c=>{
+    if(c.classList.contains('unavailable'))return;
+    c.classList.toggle('active',sel);
+    const ic=c.querySelector('.bc-check');
+    if(ic)ic.setAttribute('data-lucide',sel?'check-circle-2':'circle');
+  });
+  if(window.lucide)lucide.createIcons();
+  clearPresetActive();
+  updateBenchSummary();
+}
 
 function selectAllBenches(sel){
-  document.querySelectorAll('#evalBenchGrid .bench-chip').forEach(c=>{if(sel)c.classList.add('active');else c.classList.remove('active')});
+  document.querySelectorAll('#evalBenchGrid .bench-card').forEach(c=>{
+    if(c.classList.contains('unavailable'))return;
+    c.classList.toggle('active',sel);
+    const ic=c.querySelector('.bc-check');
+    if(ic)ic.setAttribute('data-lucide',sel?'check-circle-2':'circle');
+  });
+  if(window.lucide)lucide.createIcons();
+  clearPresetActive();
+  updateBenchSummary();
+}
+
+function applyBenchPreset(key){
+  document.querySelectorAll('#evalBenchGrid .bench-card').forEach(c=>{
+    const on=key==='all'||c.dataset.group===key;
+    const usable=on&&!c.classList.contains('unavailable');
+    c.classList.toggle('active',usable);
+    const ic=c.querySelector('.bc-check');
+    if(ic)ic.setAttribute('data-lucide',usable?'check-circle-2':'circle');
+  });
+  if(window.lucide)lucide.createIcons();
+  document.querySelectorAll('#benchPresets .preset-btn').forEach(b=>b.classList.toggle('active',b.dataset.preset===key));
+  updateBenchSummary();
+}
+
+function clearPresetActive(){
+  document.querySelectorAll('#benchPresets .preset-btn').forEach(b=>b.classList.remove('active'));
+}
+
+function updateBenchSummary(){
+  const total=document.querySelectorAll('#evalBenchGrid .bench-card').length;
+  const sel=document.querySelectorAll('#evalBenchGrid .bench-card.active').length;
+  const badge=$('benchSelBadge');
+  if(badge)badge.innerHTML='已选 <b>'+sel+'</b> / '+total;
+}
+
+function filterBenches(){
+  const q=($('benchSearch').value||'').trim().toLowerCase();
+  document.querySelectorAll('#evalBenchGrid .bench-card').forEach(c=>{
+    const text=(c.dataset.name||'')+' '+(c.dataset.desc||'');
+    c.classList.toggle('bench-hidden',!!q&&text.indexOf(q)<0);
+  });
+  document.querySelectorAll('#evalBenchGrid .bench-group').forEach(g=>{
+    const visible=Array.from(g.querySelectorAll('.bench-card')).some(c=>!c.classList.contains('bench-hidden'));
+    g.classList.toggle('bench-group-hidden',!visible);
+  });
 }
 
 async function toggleModelDropdown(){
@@ -1198,7 +1375,7 @@ function getSelectedModels(){
 
 function getSelectedBenches(){
   const result=[];
-  document.querySelectorAll('#evalBenchGrid .bench-chip.active').forEach(c=>{
+  document.querySelectorAll('#evalBenchGrid .bench-card.active').forEach(c=>{
     c.dataset.bench.split(',').forEach(id=>{if(id)result.push(id)});
   });
   return result;
