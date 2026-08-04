@@ -523,23 +523,22 @@ class EvalRunner:
                     if scored_count > 0 else None
                 )
 
-                if completed % 5 == 0 or completed == total:
-                    elapsed = time.time() - start_time
-                    with self._progress_lock:
-                        self.progress[pk].update({
-                            "done": completed, "total": total,
-                            "correct": correct_count,
-                            "accuracy": acc,
-                            "status": "running",
-                        })
-                    self.queue.put({
-                        "type": "progress",
-                        "model_key": model_key, "bench_id": bench_id,
+                elapsed = time.time() - start_time
+                with self._progress_lock:
+                    self.progress[pk].update({
                         "done": completed, "total": total,
                         "correct": correct_count,
                         "accuracy": acc,
-                        "elapsed": round(elapsed, 0),
+                        "status": "running",
                     })
+                self.queue.put({
+                    "type": "progress",
+                    "model_key": model_key, "bench_id": bench_id,
+                    "done": completed, "total": total,
+                    "correct": correct_count,
+                    "accuracy": acc,
+                    "elapsed": round(elapsed, 0),
+                })
 
             if aborted:
                 break
