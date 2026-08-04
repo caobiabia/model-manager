@@ -2077,6 +2077,13 @@ async function deleteLbEntries(category,modelKey){
 /* ── Init ── */
 if(window.lucide)lucide.createIcons();
 switchView('eval');
+document.addEventListener('click',e=>{
+  if(selectedGpu==null)return;
+  if(e.target.closest&&e.target.closest('.gpu-bar, .model-list'))return;
+  selectedGpu=null;
+  renderGpus();
+  refreshModels();
+});
 refreshModels();loadGpus();setInterval(refreshModels,15000);setInterval(loadGpus,30000);setInterval(refreshEvalRunStatuses,5000);
 </script>
 </body>
