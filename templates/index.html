@@ -166,6 +166,7 @@ svg.lucide{flex-shrink:0;stroke-width:2}
 .gpu-chip.selected{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
 .gpu-chip-top{display:flex;align-items:center;justify-content:space-between;gap:6px}
 .gpu-chip-label{color:var(--text);font-weight:600;white-space:nowrap}
+.gpu-chip-util{font-size:9.5px;color:var(--text-mute);font-weight:500;margin-left:4px}
 .gpu-chip-track{width:100%;height:5px;border-radius:3px;background:var(--border-strong);overflow:hidden}
 .gpu-chip-fill{display:block;height:100%;width:0;border-radius:3px;background:linear-gradient(90deg,hsl(152,54%,46%),var(--green));transition:width .5s var(--ease)}
 .gpu-chip-val{color:var(--green);font-weight:600;text-align:right;white-space:nowrap}
@@ -881,9 +882,9 @@ function renderGpus(){
       }).join('')+'</div>';
     }
     return '<div class="'+cls.join(' ')+'" data-gpu="'+g.index+'" onclick="toggleGpuSelect('+g.index+')" title="'+escapeHtml(g.name)+'">'+
-      '<div class="gpu-chip-top"><span class="gpu-chip-label">GPU'+g.index+'</span><span class="gpu-chip-val">剩 '+fmtG(g.free_mb)+'G</span></div>'+
+      '<div class="gpu-chip-top"><span class="gpu-chip-label">GPU'+g.index+'<span class="gpu-chip-util">'+(util==null?'-':util.toFixed(0)+'%')+'</span></span><span class="gpu-chip-val">剩 '+fmtG(g.free_mb)+'G</span></div>'+
       '<div class="gpu-chip-track"><span class="gpu-chip-fill" style="width:'+pct+'%"></span></div>'+
-      '<div class="gpu-chip-sub">已用 '+fmtG(g.used_mb)+'G / '+fmtG(g.total_mb)+'G · 利用率 '+(util==null?'-':util.toFixed(0)+'%')+' · '+(temp==null?'-':temp.toFixed(0)+'°C')+'</div>'+
+      '<div class="gpu-chip-sub">已用 '+fmtG(g.used_mb)+'G / '+fmtG(g.total_mb)+'G · '+(temp==null?'-':temp.toFixed(0)+'°C')+'</div>'+
       procsHtml+
     '</div>';
   }).join('')||'<span style="color:var(--text-mute);font-size:11px">无 GPU 数据</span>';
