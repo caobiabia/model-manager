@@ -14,6 +14,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from queue import Empty, Queue
@@ -361,8 +362,8 @@ def _cleanup_model_state(key: str) -> None:
     _log_history.pop(key, None)
     if proc is not None and proc.poll() is None:
         try:
-            proc.terminate()
-        except ProcessLookupError:
+            _kill_pid_tree(proc.pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError, OSError):
             pass
 
 
@@ -586,44 +587,123 @@ async def stop_model(model_key: str):
         # Graceful terminate → force kill after timeout
         try:
             if proc.poll() is None:
-                proc.terminate()
+                await asyncio.get_running_loop().run_in_executor(
+                    _thread_pool, _stop_pid_tree_sync, proc.pid, 15,
+                )
                 try:
-                    proc.wait(timeout=15)
+                    proc.wait(timeout=2)
                 except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait()
+                    pass
         except ProcessLookupError:
             pass
 
     return {"ok": True, "message": f"Model {model_key} stopped"}
 
 
-async def _kill_by_port(port: int) -> bool:
-    """Kill the process listening on *port* using ss + kill. Returns True on success."""
+def _descendant_pids(root: int) -> list[int]:
+    """Return all descendant PIDs of *root* using ps."""
     try:
-        r = await asyncio.get_running_loop().run_in_executor(
-            _thread_pool,
-            lambda: subprocess.run(
-                ["ss", "-tlnp"], capture_output=True, text=True, timeout=5,
-            ),
+        r = subprocess.run(
+            ["ps", "-eo", "pid=,ppid="], capture_output=True, text=True, timeout=5,
+        )
+        children: dict[int, list[int]] = {}
+        for line in r.stdout.splitlines():
+            parts = line.split()
+            if len(parts) >= 2:
+                children.setdefault(int(parts[1]), []).append(int(parts[0]))
+        out: list[int] = []
+        stack = [root]
+        while stack:
+            p = stack.pop()
+            for c in children.get(p, []):
+                out.append(c)
+                stack.append(c)
+        return out
+    except Exception:
+        return []
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        with open(f"/proc/{pid}/stat", "r", encoding="utf-8") as f:
+            data = f.read()
+        # state is the field right after the ")" of the comm field
+        state = data[data.rfind(")") + 2:].split()[0]
+        if state == "Z":
+            return False
+    except (ProcessLookupError, FileNotFoundError, IndexError):
+        return False
+    except PermissionError:
+        pass
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def _kill_pid_tree(root: int, sig: int) -> None:
+    """Send *sig* to a PID and all of its descendants."""
+    pids = [root] + _descendant_pids(root)
+    # If the process is its own group leader, signal the whole group too so
+    # reparented children (e.g. VLLM::EngineCore) don't survive.
+    try:
+        if os.getpgid(root) == root:
+            os.killpg(root, sig)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+    for pid in pids:
+        try:
+            os.kill(pid, sig)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+
+def _stop_pid_tree_sync(root: int, grace: float = 5.0) -> None:
+    """SIGTERM a process tree, wait, then SIGKILL anything still alive."""
+    targets = [root] + _descendant_pids(root)
+    _kill_pid_tree(root, signal.SIGTERM)
+    deadline = time.monotonic() + grace
+    while time.monotonic() < deadline:
+        if not any(_pid_alive(p) for p in targets):
+            return
+        time.sleep(0.2)
+    _kill_pid_tree(root, signal.SIGKILL)
+    for pid in targets:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+
+def _kill_by_port_sync(port: int) -> bool:
+    """Find the PID listening on *port* and stop its whole process tree."""
+    try:
+        r = subprocess.run(
+            ["ss", "-tlnp"], capture_output=True, text=True, timeout=5,
         )
     except Exception:
         return False
 
-    # Parse ss output for "LISTEN ... :<port> ... pid=<N>"
+    import re
     for line in r.stdout.split("\n"):
         if f":{port}" not in line:
             continue
         # Extract pid from "pid=<N>" or "pid=<N>,fd=..."
-        import re
         m = re.search(r"pid=(\d+)", line)
         if m:
-            try:
-                os.kill(int(m.group(1)), signal.SIGTERM)
-                return True
-            except (ProcessLookupError, PermissionError):
-                pass
+            _stop_pid_tree_sync(int(m.group(1)), grace=5)
+            return True
     return False
+
+
+async def _kill_by_port(port: int) -> bool:
+    """Kill the process listening on *port* (including EngineCore children)."""
+    return await asyncio.get_running_loop().run_in_executor(
+        _thread_pool, _kill_by_port_sync, port,
+    )
 
 
 # ——— live log SSE ————

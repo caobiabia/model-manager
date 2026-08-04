@@ -5,5 +5,6 @@
   "qwen35b": "基座",
   "qwen35b_lora128_qa_reasoning_full_epoch3": "3:3:1 全量数据集三轮",
   "qwen35b_lora128_qa_reasoning_full_epoch2": "3:3:1 全量数据集二轮",
-  "qwen35b_lora128_qa_reasoning_full_epoch1": "3:3:1 全量数据集一轮"
+  "qwen35b_lora128_qa_reasoning_full_epoch1": "3:3:1 全量数据集一轮",
+  "qwen35_9b_base": "基座"
 }
