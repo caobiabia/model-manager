@@ -1764,9 +1764,10 @@ async function deleteRun(runId){
 async function loadEvalRuns(){
   const panel=$('evalHistory');
   try{
+    await ensureEvalMeta();
     const runs=await(await fetch('/api/eval/runs')).json();
     if(!runs.length){panel.innerHTML='<div class="eval-empty"><i data-lucide="history"></i><div>暂无历史记录</div></div>';if(window.lucide)lucide.createIcons();return}
-    panel.innerHTML='<table class="eval-history-table"><thead><tr><th>Run ID</th><th>Mode</th><th>Models</th><th>Benches</th><th>Status</th><th></th></tr></thead><tbody>'+
+    panel.innerHTML='<table class="eval-history-table"><thead><tr><th>Run ID</th><th>Mode</th><th>模型 / Bench</th><th>Status</th><th></th></tr></thead><tbody>'+
       runs.map(r=>{
         const cfg=r.config||{};
         const summ=r.summary||{};
@@ -1775,11 +1776,15 @@ async function loadEvalRuns(){
         const statusClass=status.includes('error')?'error':status==='completed'?'completed':status==='running'?'running':'interrupted';
         const canResume=status==='interrupted'||status==='stopped';
         const canShowProgress=status==='running'||status==='stopped'||status==='interrupted';
+        const modelDesc=(cfg.model_keys||[]).map(k=>evalModelNames[k]||k).join('、');
+        const benchDesc=(cfg.bench_ids||[]).map(id=>benchNameOf(id)||id).join('、');
         return '<tr onclick="showRunDetail(\''+r.run_id+'\')">'+
           '<td style="font-family:var(--font-mono);font-size:11px">'+escapeHtml(r.run_id)+'</td>'+
           '<td>'+escapeHtml(cfg.mode||'-')+'</td>'+
-          '<td style="font-size:11px">'+(cfg.model_keys||[]).length+'</td>'+
-          '<td style="font-size:11px">'+(cfg.bench_ids||[]).length+'</td>'+
+          '<td style="font-size:11px;line-height:1.5">'+
+            (modelDesc?'<div style="color:var(--text);font-weight:500">'+escapeHtml(modelDesc)+'</div>':'')+
+            (benchDesc?'<div style="color:var(--text-dim)">'+escapeHtml(benchDesc)+'</div>':'')+
+          '</td>'+
           '<td><span class="status-pill '+statusClass+'">'+escapeHtml(status)+'</span></td>'+
           '<td onclick="event.stopPropagation()" style="display:flex;gap:4px">'+
           (canShowProgress?'<button class="btn btn-xs ghost" onclick="showEvalRun(\''+r.run_id+'\')" title="在实时进度中查看"><i data-lucide="activity"></i></button>':'')+
