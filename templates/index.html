@@ -653,7 +653,7 @@ svg.lucide{flex-shrink:0;stroke-width:2}
           <div class="eval-config-side">
             <div class="eval-field model-dropdown">
               <label><i data-lucide="box"></i>模型</label>
-              <button class="btn" onclick="toggleModelDropdown()" id="evalModelBtn"><i data-lucide="chevrons-up-down"></i><span>选择模型</span></button>
+              <button class="btn" onclick="toggleModelDropdown()" onmousedown="event.preventDefault()" id="evalModelBtn"><i data-lucide="chevrons-up-down"></i><span>选择模型</span></button>
               <div class="model-check-list" id="evalModelList" style="display:none"></div>
             </div>
             <div class="eval-field">
@@ -1345,8 +1345,14 @@ function filterBenches(){
 
 async function toggleModelDropdown(){
   const list=$('evalModelList');
+  const panel=document.querySelector('#viewEval .eval-panel');
+  const prevScroll=panel?panel.scrollTop:null;
   if(list.style.display!=='none'){list.style.display='none';return}
   list.style.display='block';
+  // Keep the panel from jumping to bring the button into view when the menu opens
+  requestAnimationFrame(()=>{
+    if(panel&&prevScroll!==null&&panel.scrollTop!==prevScroll)panel.scrollTop=prevScroll;
+  });
   list.innerHTML='<div style="padding:8px;color:var(--text-mute);font-size:11px">loading...</div>';
   // close on outside click
   setTimeout(()=>{
