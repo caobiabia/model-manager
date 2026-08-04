@@ -490,6 +490,10 @@ svg.lucide{flex-shrink:0;stroke-width:2}
 .bench-groups{display:flex;flex-direction:column;gap:8px}
 .bench-group{border:1px solid var(--border);border-radius:var(--radius);background:var(--panel);overflow:hidden;flex-shrink:0;transition:border-color var(--t-fast)}
 .bench-group:hover{border-color:var(--border-strong)}
+.bench-group.all-selected{border-color:var(--g-c);box-shadow:0 0 0 1px var(--g-c) inset}
+.bench-group.all-selected .bench-group-head{background:var(--g-soft)}
+.bench-group.all-selected .bench-group-head:hover{background:var(--g-soft)}
+.bench-group.all-selected .g-count{background:var(--g-c);color:#fff}
 .bench-group[data-key="med_hard"]{--g-c:var(--accent);--g-soft:var(--accent-soft)}
 .bench-group[data-key="med_full"]{--g-c:var(--accent-strong);--g-soft:var(--accent-soft)}
 .bench-group[data-key="general"]{--g-c:var(--green);--g-soft:var(--green-soft)}
@@ -1329,6 +1333,10 @@ function updateBenchSummary(){
   const sel=document.querySelectorAll('#evalBenchGrid .bench-card.active').length;
   const badge=$('benchSelBadge');
   if(badge)badge.innerHTML='已选 <b>'+sel+'</b> / '+total;
+  document.querySelectorAll('#evalBenchGrid .bench-group').forEach(g=>{
+    const cards=Array.from(g.querySelectorAll('.bench-card:not(.unavailable)'));
+    g.classList.toggle('all-selected',cards.length>0&&cards.every(c=>c.classList.contains('active')));
+  });
 }
 
 function filterBenches(){
