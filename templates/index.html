@@ -557,6 +557,7 @@ svg.lucide{flex-shrink:0;stroke-width:2}
 .eval-progress-table .progress-fill{height:100%;background:var(--accent);border-radius:3px;transition:width .3s var(--ease)}
 .eval-progress-table .progress-fill.green{background:var(--green)}
 .eval-progress-split{display:grid;grid-template-columns:minmax(180px,240px) 1fr;gap:14px;align-items:start}
+.eval-progress-split.no-runs{grid-template-columns:1fr}
 @media (max-width:1180px){.eval-progress-split{grid-template-columns:1fr}}
 .eval-run-cards{display:flex;flex-direction:column;gap:8px;background:var(--panel-2);border:1px solid var(--border);border-radius:var(--radius-lg);padding:10px;min-width:0;max-height:420px;overflow-y:auto}
 .eval-run-card{display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--panel);font-size:11px;color:var(--text-dim);cursor:pointer;user-select:none;white-space:nowrap;transition:all var(--t-fast)}
@@ -1519,8 +1520,14 @@ function renderRunningEvalList(){
   const list=$('runningEvalList');
   if(!list)return;
   const runs=Object.values(evalRuns);
-  if(!runs.length){list.style.display='none';return}
+  const split=document.querySelector('.eval-progress-split');
+  if(!runs.length){
+    list.style.display='none';
+    if(split)split.classList.add('no-runs');
+    return
+  }
   list.style.display='flex';
+  if(split)split.classList.remove('no-runs');
   list.innerHTML=runs.map(r=>{
     const active=r.run_id===activeEvalRunId;
     const dotClass=r.status==='completed'?'completed':(r.status==='stopped'||r.status==='interrupted'?'stopped':'running');
