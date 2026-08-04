@@ -1647,6 +1647,8 @@ function handleEvalEvent(runId,ev){
     run.status='error';
   }else if(ev.type==='done'){
     run.progressData._finalResults=ev.results;
+    // Runner has finished; finalize immediately even if [EOF] is lost.
+    onEvalDone(runId);
   }
   updateRunSummary(runId);
   if(activeEvalRunId===runId)renderEvalProgress(runId);
