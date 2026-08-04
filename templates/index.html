@@ -1083,12 +1083,6 @@ function modelGroupOf(m){
 function shortModelName(m){
   let s=m.display_name||m.key;
   s=s.replace(/\s*[（(]\s*(?:原始|基模)\s*[)）]\s*/g,'');
-  const m2=s.match(/^(.+?)\s*[（(](.+)[)）]\s*$/);
-  if(m2){
-    const inner=m2[2].trim();
-    if(inner)return inner;
-    return m2[1].trim();
-  }
   return s.trim();
 }
 function modelMatchesQuery(m){
