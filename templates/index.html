@@ -196,8 +196,6 @@ svg.lucide{flex-shrink:0;stroke-width:2}
 .model-row.active.status-on{border-left-color:var(--green);background:var(--green-soft)}
 .model-row.active.status-off{border-left-color:var(--text-dim)}
 .model-row.active.status-loading{border-left-color:var(--amber);background:var(--amber-soft)}
-.model-row.gpu-muted{opacity:.35}
-.model-row.gpu-match{border-color:var(--accent);background:var(--accent-soft)}
 
 .model-row .status{
   width:9px;height:9px;border-radius:50%;flex-shrink:0;
@@ -910,13 +908,6 @@ function populateLaunchGpu(){
 function toggleGpuSelect(idx){
   selectedGpu=(selectedGpu===idx)?null:idx;
   renderGpus();
-  refreshModels();
-}
-function setSelectedGpu(idx){
-  if(selectedGpu===idx)return;
-  selectedGpu=idx;
-  renderGpus();
-  refreshModels();
 }
 
 function renderContent(text){
@@ -987,11 +978,7 @@ function renderModels(models){
       if(isLoading) row.classList.add('status-loading');
       else row.classList.add('status-on');
     }else{row.classList.add('status-off')}
-    if(selectedGpu!=null){
-      if(mgpu===selectedGpu)row.classList.add('gpu-match');
-      else row.classList.add('gpu-muted');
-    }
-    row.onclick=()=>{selectModel(m.key,m.running);if(mgpu!=null)setSelectedGpu(mgpu)};
+    row.onclick=()=>selectModel(m.key,m.running);
     const dot=document.createElement('div');
     dot.className='status '+(m.running?(isLoading?'loading':'on'):'off');
     if(isLoading)dot.title='启动中...';
@@ -2082,7 +2069,6 @@ document.addEventListener('click',e=>{
   if(e.target.closest&&e.target.closest('.gpu-bar, .model-list'))return;
   selectedGpu=null;
   renderGpus();
-  refreshModels();
 },true);
 refreshModels();loadGpus();setInterval(refreshModels,15000);setInterval(loadGpus,30000);setInterval(refreshEvalRunStatuses,5000);
 </script>
