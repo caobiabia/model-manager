@@ -284,9 +284,21 @@ svg.lucide{flex-shrink:0;stroke-width:2}
 .model-row .detail .model-desc-edit{
   font:inherit;color:var(--text);background:var(--input-bg);
   border:1px solid var(--accent);border-radius:var(--radius-xs);
-  padding:1px 5px;min-width:110px;max-width:210px;outline:none;
+  padding:2px 6px;min-width:130px;max-width:none;outline:none;flex:1;
   box-shadow:0 0 0 3px var(--accent-ring);font-variant-numeric:tabular-nums;
 }
+.model-row.editing-desc{background:var(--accent-soft);border-color:var(--accent-ring)}
+.model-row.editing-desc .detail{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.model-desc-actions{display:inline-flex;gap:2px;flex-shrink:0}
+.model-desc-btn{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:22px;height:22px;padding:0;border:1px solid var(--border);
+  border-radius:var(--radius-xs);background:var(--panel-2);color:var(--text-dim);
+  cursor:pointer;transition:background var(--t-fast),color var(--t-fast),border-color var(--t-fast);
+}
+.model-desc-btn svg.lucide{width:12px;height:12px}
+.model-desc-btn.ok:hover{color:var(--green);border-color:var(--green);background:var(--green-soft)}
+.model-desc-btn.cancel:hover{color:var(--red);border-color:var(--red);background:var(--red-soft)}
 .model-row .actions{
   display:flex;gap:3px;align-items:center;flex-shrink:0;
   justify-content:flex-end;opacity:.7;transition:opacity var(--t-fast);
@@ -1116,11 +1128,12 @@ function makeModelRow(m){
   const isLoading=m.loading;
   const mgpu=modelGpuIndex(m);
   row.className=(m.key===activeModel?'active ':'')+'model-row';
+  if(editingDescKey===m.key)row.classList.add('editing-desc');
   if(m.running){
     if(isLoading) row.classList.add('status-loading');
     else row.classList.add('status-on');
   }else{row.classList.add('status-off')}
-  row.onclick=()=>selectModel(m.key,m.running);
+  row.onclick=()=>{if(editingDescKey===m.key)return;selectModel(m.key,m.running)};
   const dot=document.createElement('div');
   dot.className='status '+(m.running?(isLoading?'loading':'on'):'off');
   if(isLoading)dot.title='启动中...';
@@ -1142,12 +1155,27 @@ function makeModelRow(m){
     input.id='modelDescInput'; input.className='model-desc-edit';
     input.value=editingDescValue||'';
     input.placeholder='中文描述';
+    input.title='Enter 保存 · Esc 取消';
     input.onkeydown=e=>{
       if(e.key==='Enter'){e.preventDefault();saveModelDescription(m.key);}
       else if(e.key==='Escape'){cancelEditDesc();}
     };
-    input.onblur=()=>saveModelDescription(m.key);
     detail.appendChild(input);
+    const editActions=document.createElement('span');
+    editActions.className='model-desc-actions';
+    const okBtn=document.createElement('button');
+    okBtn.className='model-desc-btn ok'; okBtn.title='保存';
+    okBtn.innerHTML='<i data-lucide="check"></i>';
+    okBtn.onmousedown=e=>e.preventDefault();
+    okBtn.onclick=e=>{e.stopPropagation();saveModelDescription(m.key);};
+    const cancelBtn=document.createElement('button');
+    cancelBtn.className='model-desc-btn cancel'; cancelBtn.title='取消';
+    cancelBtn.innerHTML='<i data-lucide="x"></i>';
+    cancelBtn.onmousedown=e=>e.preventDefault();
+    cancelBtn.onclick=e=>{e.stopPropagation();cancelEditDesc();};
+    editActions.appendChild(okBtn);
+    editActions.appendChild(cancelBtn);
+    detail.appendChild(editActions);
   }else{
     const desc=document.createElement('span');
     desc.className='model-desc'+(m.description?'':' empty');
