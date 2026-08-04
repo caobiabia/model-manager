@@ -181,12 +181,75 @@ svg.lucide{flex-shrink:0;stroke-width:2}
 .gpu-chip.hot{border-color:var(--red-soft)}
 .gpu-chip.hot .gpu-chip-val{color:var(--red)}
 
+/* Model toolbar */
+.model-toolbar{
+  padding:8px 10px 7px;border-bottom:1px solid var(--border);
+  background:var(--panel-2);display:flex;flex-direction:column;gap:6px;
+  flex-shrink:0;
+}
+.model-search{position:relative;display:flex;align-items:center}
+.model-search>svg{
+  position:absolute;left:9px;width:14px;height:14px;color:var(--text-mute);
+  pointer-events:none;z-index:1;
+}
+.model-search input{
+  width:100%;height:30px;padding:0 30px 0 31px;
+  border:1px solid var(--border);border-radius:var(--radius);
+  background:var(--input-bg);color:var(--text);font-size:12px;
+  font-family:var(--font);outline:none;
+  transition:border-color var(--t-fast),box-shadow var(--t-fast);
+}
+.model-search input::placeholder{color:var(--text-mute)}
+.model-search input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-ring)}
+.model-search .ms-clear{
+  position:absolute;right:4px;display:none;align-items:center;justify-content:center;
+  width:22px;height:22px;padding:0;border:none;border-radius:var(--radius-xs);
+  background:transparent;color:var(--text-mute);cursor:pointer;
+  transition:background var(--t-fast),color var(--t-fast);
+}
+.model-search .ms-clear:hover{background:var(--panel-hover);color:var(--text)}
+.model-search .ms-clear svg{width:12px;height:12px}
+.model-filters{display:flex;gap:4px}
+.model-filter{
+  flex:1;display:inline-flex;align-items:center;justify-content:center;gap:5px;
+  padding:4px 6px;font-size:11px;font-weight:500;color:var(--text-dim);
+  background:transparent;border:1px solid transparent;border-radius:var(--radius-sm);
+  cursor:pointer;white-space:nowrap;line-height:1.2;font-family:var(--font);
+  transition:background var(--t-fast),color var(--t-fast),border-color var(--t-fast);
+}
+.model-filter:hover{color:var(--text);background:var(--panel-hover)}
+.model-filter.active{color:var(--accent);background:var(--accent-soft);border-color:var(--accent-ring)}
+.model-filter .f-count{
+  font-size:9.5px;font-weight:600;font-style:normal;color:var(--text-mute);
+  background:var(--panel-2);border:1px solid var(--border);
+  padding:1px 5px;border-radius:999px;line-height:1.4;
+}
+.model-filter.active .f-count{color:var(--accent);background:var(--accent-soft);border-color:var(--accent-ring)}
+
 /* Model list */
-.model-list{flex:1;overflow-y:auto;padding:6px 8px}
+.model-list{flex:1;overflow-y:auto;padding:5px 8px 8px}
+.model-empty{padding:28px 14px;text-align:center;color:var(--text-mute);font-size:12px}
+.model-group-header{
+  display:flex;align-items:center;gap:5px;
+  padding:7px 6px 4px;cursor:pointer;user-select:none;
+  position:sticky;top:0;z-index:2;background:var(--panel);
+  font-size:11px;font-weight:700;letter-spacing:.03em;color:var(--text-mute);
+  transition:color var(--t-fast);
+}
+.model-group-header:hover{color:var(--text)}
+.model-group-header .g-chevron{width:12px;height:12px;color:var(--text-mute);transition:transform var(--t-fast)}
+.model-group-header .g-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.model-group-header .g-count{
+  margin-left:auto;font-size:10px;font-weight:600;color:var(--text-mute);
+  background:var(--panel-2);border:1px solid var(--border);
+  padding:1px 7px;border-radius:999px;flex-shrink:0;
+}
+.model-group.collapsed .model-group-header .g-chevron{transform:rotate(-90deg)}
+.model-group.collapsed .model-row{display:none}
 .model-row{
-  display:flex;align-items:center;gap:10px;padding:9px 10px;
+  display:flex;align-items:center;gap:8px;padding:7px 8px;
   border-radius:var(--radius);cursor:pointer;border:1px solid transparent;
-  font-size:13px;margin-bottom:3px;border-left:3px solid transparent;
+  font-size:13px;margin-bottom:2px;border-left:3px solid transparent;
   transition:background var(--t-fast),border-color var(--t-fast);
 }
 .model-row:hover{background:var(--panel-hover)}
@@ -208,15 +271,29 @@ svg.lucide{flex-shrink:0;stroke-width:2}
 @keyframes pulse-on{0%,100%{box-shadow:0 0 0 2px var(--panel),0 0 5px hsla(152,54%,52%,.4)}50%{box-shadow:0 0 0 2px var(--panel),0 0 11px hsla(152,54%,52%,.85)}}
 @keyframes pulse-amber{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.45;transform:scale(.8)}}
 
-.side-log-btn{display:inline-flex;align-items:center;gap:3px;font-size:11px;color:var(--accent);cursor:pointer;transition:opacity var(--t-fast),background var(--t-fast);padding:2px 4px;border-radius:var(--radius-xs)}
-.side-log-btn:hover{opacity:.85;background:var(--accent-soft)}
-.side-log-btn svg.lucide{width:12px;height:12px}
 .model-row .info{flex:1;min-width:0}
-.model-row .name{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px}
-.model-row .detail{font-size:11px;color:var(--text-dim);margin-top:2px;font-variant-numeric:tabular-nums}
-.model-row .actions{display:flex;gap:5px;align-items:center;flex-shrink:0;justify-content:flex-end;width:150px}
-.model-row .provider-tag{display:inline-flex;align-items:center;gap:3px;font-size:10.5px;color:var(--text-mute);font-weight:600;padding:2px 6px;border-radius:var(--radius-xs);border:1px solid var(--border)}
+.model-row .name{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12.5px}
+.model-row .detail{font-size:10.5px;color:var(--text-dim);margin-top:2px;font-variant-numeric:tabular-nums}
+.model-row .actions{
+  display:flex;gap:3px;align-items:center;flex-shrink:0;
+  justify-content:flex-end;opacity:.7;transition:opacity var(--t-fast);
+}
+.model-row:hover .actions,.model-row:focus-within .actions{opacity:1}
+.model-row .actions .icon-btn{width:26px;height:26px;padding:0;border-radius:var(--radius-sm)}
+.model-row .actions .icon-btn svg.lucide{width:13px;height:13px}
+.model-row .provider-tag{
+  display:inline-flex;align-items:center;gap:3px;font-size:10px;
+  color:var(--text-mute);font-weight:600;padding:3px 6px;border-radius:var(--radius-xs);
+  border:1px solid var(--border);white-space:nowrap;
+}
 .model-row .provider-tag svg.lucide{width:11px;height:11px}
+.side-log-btn{
+  display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;
+  font-size:11px;color:var(--accent);cursor:pointer;border:none;border-radius:var(--radius-sm);
+  background:transparent;transition:background var(--t-fast),opacity var(--t-fast);padding:0;
+}
+.side-log-btn:hover{background:var(--accent-soft)}
+.side-log-btn svg.lucide{width:13px;height:13px}
 
 /* Side log panel */
 .side-log{display:none;margin:6px;max-height:280px;overflow-y:auto;background:var(--code-bg);
@@ -629,6 +706,19 @@ svg.lucide{flex-shrink:0;stroke-width:2}
     <button class="btn btn-xs ghost" onclick="scanModels()" style="margin-left:auto" title="刷新扫描模型列表" aria-label="刷新扫描模型列表"><i data-lucide="refresh-cw"></i><span>刷新</span></button>
   </div>
   <div class="gpu-bar" id="gpuBar">loading...</div>
+  <div class="model-toolbar">
+    <div class="model-search">
+      <i data-lucide="search"></i>
+      <input id="modelSearch" type="text" placeholder="搜索模型 / 端口 / GPU" oninput="onModelSearch(this.value)" autocomplete="off" spellcheck="false">
+      <button class="ms-clear" id="modelSearchClear" onclick="clearModelSearch()" title="清空搜索" aria-label="清空搜索"><i data-lucide="x"></i></button>
+    </div>
+    <div class="model-filters">
+      <button class="model-filter active" data-filter="all" onclick="setModelFilter('all')">全部 <span class="f-count" id="modelCountAll"></span></button>
+      <button class="model-filter" data-filter="running" onclick="setModelFilter('running')">运行中 <span class="f-count" id="modelCountRunning"></span></button>
+      <button class="model-filter" data-filter="stopped" onclick="setModelFilter('stopped')">未启动 <span class="f-count" id="modelCountStopped"></span></button>
+      <button class="model-filter" data-filter="api" onclick="setModelFilter('api')">API <span class="f-count" id="modelCountApi"></span></button>
+    </div>
+  </div>
   <div class="model-list" id="modelList"></div>
   <div class="side-log" id="sideLog"></div>
 </aside>
@@ -829,6 +919,7 @@ svg.lucide{flex-shrink:0;stroke-width:2}
 const $=id=>document.getElementById(id);
 function escapeHtml(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}
 let activeModel=null, launchingKey=null, logSource=null, streaming=false, gpusCache=[], selectedGpu=null;
+let allModels=[], modelQuery='', modelFilter='all', collapsedGroups=new Set();
 
 /* ── Theme ── */
 function toggleTheme(){
@@ -968,57 +1059,162 @@ function modelGpuIndex(m){
   }
   return null;
 }
-function renderModels(models){
-  const list=$('modelList'); list.innerHTML='';
+function modelGroupOf(m){
+  if(m.provider==='deepseek')return 'API';
+  if(/gemma/i.test(m.display_name)||m.key.startsWith('gemma'))return 'Gemma';
+  if(/Qwen3\.6/i.test(m.display_name)||m.key.startsWith('qwen35b'))return 'Qwen3.6-35B';
+  if(/Qwen3\.5-9B/i.test(m.display_name)||m.key.startsWith('qwen35_9b'))return 'Qwen3.5-9B';
+  return '其他';
+}
+function modelMatchesQuery(m){
+  if(!modelQuery)return true;
+  const q=modelQuery.replace(/\s+/g,'');
+  const gpuStr=m.gpu!=null?('gpu'+m.gpu+' GPU'+m.gpu):'';
+  const hay=[m.display_name,m.key,m.served_model_name,String(m.port||''),gpuStr,modelGroupOf(m)].join(' ').toLowerCase().replace(/\s+/g,'');
+  return hay.includes(q);
+}
+function modelMatchesFilter(m){
+  if(modelFilter==='all')return true;
+  if(modelFilter==='running')return !!m.running;
+  if(modelFilter==='stopped')return !m.running&&m.provider!=='deepseek';
+  if(modelFilter==='api')return m.provider==='deepseek';
+  return true;
+}
+function updateModelCounts(models){
+  const counts={all:models.length,running:0,stopped:0,api:0};
   models.forEach(m=>{
-    const row=document.createElement('div');
-    const isLoading=m.loading;
-    const mgpu=modelGpuIndex(m);
-    row.className=(m.key===activeModel?'active ':'')+'model-row';
-    if(m.running){
-      if(isLoading) row.classList.add('status-loading');
-      else row.classList.add('status-on');
-    }else{row.classList.add('status-off')}
-    row.onclick=()=>selectModel(m.key,m.running);
-    const dot=document.createElement('div');
-    dot.className='status '+(m.running?(isLoading?'loading':'on'):'off');
-    if(isLoading)dot.title='启动中...';
-    row.appendChild(dot);
-    const info=document.createElement('div'); info.className='info';
-    const name=document.createElement('div'); name.className='name'; name.textContent=m.display_name;
-    const detail=document.createElement('div'); detail.className='detail';
-    let parts=[];
-    if(mgpu!=null)parts.push('GPU'+mgpu);
-    if(m.port)parts.push(':'+m.port);
-    if(isLoading)parts.push('[启动中]');
-    else if(m.running&&!m.pid)parts.push('[外部检测]');
-    if(m.pid&&m.running)parts.push('pid='+m.pid);
-    detail.textContent=parts.join(' · ');
-    info.appendChild(name); info.appendChild(detail);
-    row.appendChild(info);
-    const act=document.createElement('div'); act.className='actions';
-    if(m.running && m.provider!=='deepseek'){
-      const logBtn=document.createElement('span');
-      logBtn.className='side-log-btn'; logBtn.innerHTML='<i data-lucide="scroll-text"></i>日志';
-      logBtn.onclick=e=>{e.stopPropagation();toggleSideLog(m.key);};
-      act.appendChild(logBtn);
-    }
-    if(m.provider==='deepseek'){
-      const span=document.createElement('span');
-      span.className='provider-tag'; span.innerHTML='<i data-lucide="cloud"></i>API'; act.appendChild(span);
-    }else if(m.running){
-      const btn=document.createElement('button'); btn.className='btn danger btn-xs'; btn.innerHTML='<i data-lucide="square"></i>停止';
-      btn.onclick=e=>{e.stopPropagation();stopModel(m.key);};
-      act.appendChild(btn);
-    }else{
-      const btn=document.createElement('button'); btn.className='btn primary btn-xs'; btn.innerHTML='<i data-lucide="play"></i>启动';
-      btn.onclick=e=>{e.stopPropagation();openLaunch(m.key,m.display_name);};
-      act.appendChild(btn);
-    }
-    row.appendChild(act);
-    list.appendChild(row);
+    if(m.running)counts.running++;
+    if(!m.running&&m.provider!=='deepseek')counts.stopped++;
+    if(m.provider==='deepseek')counts.api++;
   });
+  $('modelCountAll').textContent=counts.all;
+  $('modelCountRunning').textContent=counts.running;
+  $('modelCountStopped').textContent=counts.stopped;
+  $('modelCountApi').textContent=counts.api;
+}
+function makeModelRow(m){
+  const row=document.createElement('div');
+  const isLoading=m.loading;
+  const mgpu=modelGpuIndex(m);
+  row.className=(m.key===activeModel?'active ':'')+'model-row';
+  if(m.running){
+    if(isLoading) row.classList.add('status-loading');
+    else row.classList.add('status-on');
+  }else{row.classList.add('status-off')}
+  row.onclick=()=>selectModel(m.key,m.running);
+  const dot=document.createElement('div');
+  dot.className='status '+(m.running?(isLoading?'loading':'on'):'off');
+  if(isLoading)dot.title='启动中...';
+  row.appendChild(dot);
+  const info=document.createElement('div'); info.className='info';
+  const name=document.createElement('div'); name.className='name'; name.textContent=m.display_name;
+  name.title=m.display_name;
+  const detail=document.createElement('div'); detail.className='detail';
+  const parts=[];
+  if(mgpu!=null)parts.push('GPU'+mgpu);
+  if(m.port)parts.push(':'+m.port);
+  if(isLoading)parts.push('[启动中]');
+  else if(m.running&&!m.pid)parts.push('[外部检测]');
+  if(m.pid&&m.running)parts.push('pid='+m.pid);
+  detail.textContent=parts.join(' · ');
+  info.appendChild(name); info.appendChild(detail);
+  row.appendChild(info);
+  const act=document.createElement('div'); act.className='actions';
+  if(m.running && m.provider!=='deepseek'){
+    const logBtn=document.createElement('button');
+    logBtn.className='side-log-btn'; logBtn.title='查看日志';
+    logBtn.innerHTML='<i data-lucide="scroll-text"></i>';
+    logBtn.onclick=e=>{e.stopPropagation();toggleSideLog(m.key);};
+    act.appendChild(logBtn);
+  }
+  if(m.provider==='deepseek'){
+    const span=document.createElement('span');
+    span.className='provider-tag'; span.innerHTML='<i data-lucide="cloud"></i>API'; act.appendChild(span);
+  }else if(m.running){
+    const btn=document.createElement('button'); btn.className='btn danger btn-xs icon-btn'; btn.title='停止';
+    btn.innerHTML='<i data-lucide="square"></i>';
+    btn.onclick=e=>{e.stopPropagation();stopModel(m.key);};
+    act.appendChild(btn);
+  }else{
+    const btn=document.createElement('button'); btn.className='btn primary btn-xs icon-btn'; btn.title='启动';
+    btn.innerHTML='<i data-lucide="play"></i>';
+    btn.onclick=e=>{e.stopPropagation();openLaunch(m.key,m.display_name);};
+    act.appendChild(btn);
+  }
+  row.appendChild(act);
+  return row;
+}
+function renderModelList(){
+  const list=$('modelList'); list.innerHTML='';
+  const items=allModels.filter(m=>modelMatchesQuery(m)&&modelMatchesFilter(m));
+  if(!items.length){
+    list.innerHTML='<div class="model-empty">'+(modelQuery?'没有匹配的模型':'暂无模型')+'</div>';
+    return;
+  }
+  if(modelQuery){
+    items.sort((a,b)=>(b.running?1:0)-(a.running?1:0)||a.display_name.localeCompare(b.display_name,'zh'));
+    items.forEach(m=>list.appendChild(makeModelRow(m)));
+  }else{
+    const groups=new Map();
+    const ensure=name=>{
+      if(!groups.has(name))groups.set(name,[]);
+      return groups.get(name);
+    };
+    items.forEach(m=>{
+      ensure(modelGroupOf(m)).push(m);
+    });
+    const order=['Gemma','Qwen3.6-35B','Qwen3.5-9B','API','其他'];
+    const forceExpand=modelFilter!=='all';
+    order.forEach(name=>{
+      const arr=groups.get(name);
+      if(!arr||!arr.length)return;
+      const hasActive=arr.some(m=>m.key===activeModel);
+      const collapsed=collapsedGroups.has(name)&&!forceExpand&&!hasActive;
+      const group=document.createElement('div');
+      group.className='model-group'+(collapsed?' collapsed':'');
+      const header=document.createElement('div');
+      header.className='model-group-header';
+      header.title='点击展开/收起';
+      header.onclick=()=>toggleModelGroup(name);
+      const chev=document.createElement('i'); chev.className='g-chevron'; chev.setAttribute('data-lucide','chevron-down');
+      const title=document.createElement('span'); title.className='g-title'; title.textContent=name;
+      const count=document.createElement('span'); count.className='g-count'; count.textContent=arr.length;
+      header.append(chev,title,count);
+      group.appendChild(header);
+      [...arr]
+        .sort((a,b)=>(b.running?1:0)-(a.running?1:0)||a.display_name.localeCompare(b.display_name,'zh'))
+        .forEach(m=>group.appendChild(makeModelRow(m)));
+      list.appendChild(group);
+    });
+  }
   if(window.lucide)lucide.createIcons({root:list});
+}
+function renderModels(models){
+  allModels=models;
+  updateModelCounts(models);
+  renderModelList();
+}
+function onModelSearch(v){
+  modelQuery=v.trim().toLowerCase();
+  const clear=$('modelSearchClear');
+  if(clear)clear.style.display=v?'flex':'none';
+  renderModelList();
+}
+function clearModelSearch(){
+  const input=$('modelSearch');
+  if(input)input.value='';
+  onModelSearch('');
+  if(input)input.focus();
+}
+function setModelFilter(filter){
+  modelFilter=filter;
+  document.querySelectorAll('.model-filter').forEach(b=>b.classList.toggle('active',b.dataset.filter===filter));
+  renderModelList();
+}
+function toggleModelGroup(name){
+  if(collapsedGroups.has(name))collapsedGroups.delete(name);
+  else collapsedGroups.add(name);
+  renderModelList();
 }
 function updateChatSelect(models){
   let sel=$('chatModel'),cur=sel.value;
