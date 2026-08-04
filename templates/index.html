@@ -607,13 +607,13 @@ svg.lucide{flex-shrink:0;stroke-width:2}
 <!-- main -->
 <main class="main">
   <div class="view-tabs">
-    <button class="view-tab active" data-view="chat" onclick="switchView('chat')"><i data-lucide="messages-square"></i><span>对话</span></button>
-    <button class="view-tab" data-view="eval" onclick="switchView('eval')"><i data-lucide="clipboard-list"></i><span>测评</span></button>
+    <button class="view-tab active" data-view="eval" onclick="switchView('eval')"><i data-lucide="clipboard-list"></i><span>测评</span></button>
     <button class="view-tab" data-view="lb" onclick="switchView('lb')"><i data-lucide="trophy"></i><span>榜单</span></button>
+    <button class="view-tab" data-view="chat" onclick="switchView('chat')"><i data-lucide="messages-square"></i><span>对话</span></button>
     <span style="flex:1"></span>
     <button class="theme-toggle" onclick="toggleTheme()" title="切换主题" aria-label="切换主题"><i data-lucide="moon" class="icon-moon"></i><i data-lucide="sun" class="icon-sun"></i></button>
   </div>
-  <div class="view-content active" id="viewChat">
+  <div class="view-content" id="viewChat">
   <div class="chat-header">
     <i data-lucide="messages-square" class="chat-title-icon"></i>
     <span class="chat-title">对话</span>
@@ -645,7 +645,7 @@ svg.lucide{flex-shrink:0;stroke-width:2}
   </div><!-- /viewChat -->
 
   <!-- eval view -->
-  <div class="view-content" id="viewEval">
+  <div class="view-content active" id="viewEval">
     <div class="eval-panel">
       <div class="eval-section">
         <h3><i data-lucide="settings-2"></i>测评配置</h3>
@@ -1163,12 +1163,12 @@ async function loadEvalBenches(){
 function renderBenchGrid(){
   const grid=$('evalBenchGrid'); grid.innerHTML='';
   const groupDefs=[
-    {key:'med_hard',icon:'activity',name:'医疗 Bench · Hard',meta:'test_hard · 高难子集',collapsed:false},
+    {key:'med_hard',icon:'activity',name:'医疗 Bench · Hard',meta:'test_hard · 高难子集',collapsed:true},
     {key:'med_full',icon:'layers',name:'医疗 Bench · 全量',meta:'test · 全量测试集',collapsed:true},
-    {key:'general',icon:'globe',name:'通用 Bench',meta:'MMLU / GSM8K / C-Eval / GPQA / AIME',collapsed:false},
-    {key:'general_subset',icon:'filter',name:'通用 Bench · 1000 子集',meta:'基于历史测评的错误聚焦子集',collapsed:false},
+    {key:'general',icon:'globe',name:'通用 Bench',meta:'MMLU / GSM8K / C-Eval / GPQA / AIME',collapsed:true},
+    {key:'general_subset',icon:'filter',name:'通用 Bench · 1000 子集',meta:'基于历史测评的错误聚焦子集',collapsed:true},
     {key:'s10',icon:'gauge',name:'采样 10%',meta:'EN + 中文 × hard / easy',collapsed:true},
-    {key:'subset',icon:'sliders-horizontal',name:'自定义子集',meta:'自定义数据',collapsed:false}
+    {key:'subset',icon:'sliders-horizontal',name:'自定义子集',meta:'自定义数据',collapsed:true}
   ];
   const groups={};
   groupDefs.forEach(g=>groups[g.key]=[]);
@@ -1231,13 +1231,13 @@ function renderBenchGrid(){
       Object.keys(byDs).sort().forEach(ds=>{
         const info=byDs[ds];
         const card=document.createElement('div');
-        card.className='bench-card active';
+        card.className='bench-card';
         card.dataset.bench=info.ids.join(',');
         card.dataset.group=g.key;
         card.dataset.name=(info.name+' 采样 s10').toLowerCase();
         card.dataset.desc=(info.ids.join(',')+' '+g.name).toLowerCase();
         card.title=info.ids.join(', ');
-        card.innerHTML='<i data-lucide="check-circle-2" class="bc-check"></i>'+
+        card.innerHTML='<i data-lucide="circle" class="bc-check"></i>'+
           '<span class="bc-name">'+escapeHtml(info.name)+'</span>'+
           '<span class="bc-tags"><span class="tag">'+info.ids.length+'x</span></span>';
         card.onclick=()=>toggleBenchCard(card);
@@ -1247,7 +1247,7 @@ function renderBenchGrid(){
       items.forEach(b=>{
         const unavailable=!b.exists;
         const card=document.createElement('div');
-        card.className='bench-card'+(unavailable?' unavailable':' active');
+        card.className='bench-card'+(unavailable?' unavailable':'');
         card.dataset.bench=b.id;
         card.dataset.group=g.key;
         card.dataset.name=(b.name+' '+b.id).toLowerCase();
@@ -1255,7 +1255,7 @@ function renderBenchGrid(){
         card.title=b.description||b.id;
         const langCls=b.language==='zh'?'lang-zh':'';
         const fmt=b.format==='free'?'free':'mcq';
-        const icon=unavailable?'x-circle':(b.format==='free'?'hash':'check-circle-2');
+        const icon=unavailable?'x-circle':'circle';
         card.innerHTML='<i data-lucide="'+icon+'" class="bc-check"></i>'+
           '<span class="bc-name">'+escapeHtml(b.name)+'</span>'+
           '<span class="bc-tags">'+
@@ -1799,6 +1799,7 @@ async function clearLeaderboard(){
 
 /* ── Init ── */
 if(window.lucide)lucide.createIcons();
+switchView('eval');
 refreshModels();loadGpus();setInterval(refreshModels,15000);setInterval(loadGpus,30000);
 </script>
 </body>
