@@ -161,10 +161,10 @@ svg.lucide{flex-shrink:0;stroke-width:2}
   background:var(--panel-2);color:var(--text-dim);
   border:1px solid var(--border);white-space:nowrap;line-height:1;
 }
-.gpu-chip-label{color:var(--text);font-weight:600}
+.gpu-chip-label{width:42px;flex-shrink:0;text-align:left;color:var(--text);font-weight:600}
 .gpu-chip-track{width:36px;height:4px;border-radius:3px;background:var(--border-strong);overflow:hidden;flex-shrink:0}
 .gpu-chip-fill{display:block;height:100%;width:0;border-radius:3px;background:linear-gradient(90deg,hsl(152,54%,46%),var(--green));transition:width .5s var(--ease)}
-.gpu-chip-val{color:var(--green);font-weight:600}
+.gpu-chip-val{width:42px;flex-shrink:0;text-align:right;color:var(--green);font-weight:600}
 .gpu-chip.busy{border-color:var(--amber-soft)}
 .gpu-chip.busy .gpu-chip-fill{background:linear-gradient(90deg,var(--amber),var(--red))}
 .gpu-chip.busy .gpu-chip-val{color:var(--amber)}
@@ -202,7 +202,7 @@ svg.lucide{flex-shrink:0;stroke-width:2}
 .model-row .info{flex:1;min-width:0}
 .model-row .name{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px}
 .model-row .detail{font-size:11px;color:var(--text-dim);margin-top:2px;font-variant-numeric:tabular-nums}
-.model-row .actions{display:flex;gap:5px;align-items:center;flex-shrink:0}
+.model-row .actions{display:flex;gap:5px;align-items:center;flex-shrink:0;justify-content:flex-end;width:150px}
 .model-row .provider-tag{display:inline-flex;align-items:center;gap:3px;font-size:10.5px;color:var(--text-mute);font-weight:600;padding:2px 6px;border-radius:var(--radius-xs);border:1px solid var(--border)}
 .model-row .provider-tag svg.lucide{width:11px;height:11px}
 
