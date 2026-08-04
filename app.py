@@ -750,6 +750,7 @@ async def eval_stream(run_id: str, request: Request):
                 )
             except Empty:
                 if entry["status"] != "running":
+                    yield "data: [EOF]\n\n"
                     break
                 continue
             except Exception:

@@ -1599,7 +1599,9 @@ function streamEval(runId){
     if(e.data==='[EOF]'){es.close();if(run.eventSource===es)run.eventSource=null;onEvalDone(runId);return}
     try{const ev=JSON.parse(e.data);handleEvalEvent(runId,ev)}catch(ex){}
   };
-  es.onerror=()=>{if(run.eventSource===es){run.eventSource=null;es.close()}};
+  // Let EventSource auto-reconnect on transient errors; completion is
+  // handled via [EOF] or the periodic status reconciliation below.
+  es.onerror=()=>{};
 }
 function handleEvalEvent(runId,ev){
   const run=evalRuns[runId];
@@ -1679,6 +1681,27 @@ function onEvalDone(runId){
     if(activeEvalRunId===runId)renderEvalProgress(runId);
   }
   loadEvalRuns();
+}
+async function refreshEvalRunStatuses(){
+  try{
+    const runs=await(await fetch('/api/eval/runs')).json();
+    const byId={};
+    runs.forEach(r=>byId[r.run_id]=r.status);
+    for(const rid of Object.keys(evalRuns)){
+      const st=byId[rid];
+      const run=evalRuns[rid];
+      if(!st||!run)continue;
+      if(st==='completed'&&run.status!=='completed'){
+        if(run.eventSource){run.eventSource.close();run.eventSource=null}
+        run.status='completed';
+        onEvalDone(rid);
+      }else if(st.startsWith('error')&&run.status!=='error'){
+        run.status='error';
+        renderRunningEvalList();
+        if(activeEvalRunId===rid)renderEvalProgress(rid);
+      }
+    }
+  }catch(e){}
 }
 async function resumeRun(runId){
   if(!confirm('\u7ee7\u7eed\u8fd0\u884c '+runId+'? \u5c06\u8df3\u8fc7\u5df2\u5b8c\u6210\u7684\u9898\u76ee\uff0c\u4ece\u65ad\u70b9\u7ee7\u7eed\u3002'))return;
@@ -1970,7 +1993,7 @@ async function clearLeaderboard(){
 /* ── Init ── */
 if(window.lucide)lucide.createIcons();
 switchView('eval');
-refreshModels();loadGpus();setInterval(refreshModels,15000);setInterval(loadGpus,30000);
+refreshModels();loadGpus();setInterval(refreshModels,15000);setInterval(loadGpus,30000);setInterval(refreshEvalRunStatuses,5000);
 </script>
 </body>
 </html>
