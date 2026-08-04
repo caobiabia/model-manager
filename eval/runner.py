@@ -301,11 +301,28 @@ class EvalRunner:
         if results:
             processed_ids = {r.get("realidx") for r in results}
 
+        initial_done = min(len(processed_ids), total) if total > 0 else len(processed_ids)
+        initial_correct = sum(1 for r in results if r.get("correct") is True)
+        initial_scored = sum(1 for r in results if r.get("correct") is not None)
+        initial_acc = (
+            round(initial_correct / initial_scored * 100, 2)
+            if initial_scored else None
+        )
+        pk = f"{model_key}|{bench_id}"
+        with self._progress_lock:
+            self.progress[pk] = {
+                "model_key": model_key, "model": model_key,
+                "bench_id": bench_id, "bench_name": bench.name,
+                "total": total, "done": initial_done,
+                "correct": initial_correct, "accuracy": initial_acc,
+                "status": "running",
+            }
+
         self.queue.put({
             "type": "pair_start",
             "model_key": model_key, "bench_id": bench_id,
             "bench_name": bench.name, "total": total,
-            "done": min(len(processed_ids), total) if total > 0 else len(processed_ids),
+            "done": initial_done,
             "resume_skipped": total - len(to_process),
         })
 
@@ -508,6 +525,13 @@ class EvalRunner:
 
                 if completed % 5 == 0 or completed == total:
                     elapsed = time.time() - start_time
+                    with self._progress_lock:
+                        self.progress[pk].update({
+                            "done": completed, "total": total,
+                            "correct": correct_count,
+                            "accuracy": acc,
+                            "status": "running",
+                        })
                     self.queue.put({
                         "type": "progress",
                         "model_key": model_key, "bench_id": bench_id,
@@ -553,6 +577,11 @@ class EvalRunner:
             "aborted": aborted,
         }
         self.results[(model_key, bench_id)] = summary
+        with self._progress_lock:
+            self.progress[pk].update({
+                "done": processed_count, "correct": correct_count,
+                "accuracy": accuracy, "status": "done",
+            })
 
         self.queue.put({
             "type": "pair_done",

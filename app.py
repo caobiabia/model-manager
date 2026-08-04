@@ -774,35 +774,19 @@ async def eval_stop_run(run_id: str):
     return {"ok": True, "message": "Stop signal sent"}
 
 
-@app.get("/api/eval/run/{run_id}/progress")
-async def eval_get_progress(run_id: str):
-    """Get current progress snapshot.
-
-    For active runs, read from the runner's in-memory progress dict.
-    For interrupted runs (server restarted), reconstruct from disk by
-    counting entries in each results JSON file.
-    """
-    # Active run -- read from memory
-    entry = _eval_runs.get(run_id)
-    if entry is not None:
-        runner: EvalRunner = entry["runner"]
-        return {"run_id": run_id, "progress": runner.get_progress()}
-
-    # Interrupted run -- reconstruct from disk
+def _progress_from_disk(run_id: str) -> dict | None:
+    """Reconstruct progress for a run from its results/progress files."""
     output_dir = Path(__file__).resolve().parent / "eval" / "output" / run_id
     if not output_dir.exists():
-        raise HTTPException(404, f"Unknown run: {run_id}")
-
-    # Read config to know model_keys and bench_ids
+        return None
     config_file = output_dir / "config.json"
     if not config_file.exists():
-        raise HTTPException(404, f"No config for run: {run_id}")
+        return None
     config = json.loads(config_file.read_text(encoding="utf-8"))
     model_keys = config.get("model_keys", [])
     bench_ids = config.get("bench_ids", [])
     mode = config.get("mode", "cot")
 
-    # Look up bench names and totals from the registry
     from eval.benches import get_bench
     from eval.common import load_jsonl
 
@@ -860,6 +844,31 @@ async def eval_get_progress(run_id: str):
                 "accuracy": acc,
                 "status": "done" if (total > 0 and done >= total) else "interrupted",
             }
+    return progress
+
+
+@app.get("/api/eval/run/{run_id}/progress")
+async def eval_get_progress(run_id: str):
+    """Get current progress snapshot.
+
+    For active runs, prefer the runner's in-memory progress dict and fall
+    back to reconstructing from disk (covers runs started before a server
+    reload or whose in-memory snapshot is not yet populated).
+    """
+    entry = _eval_runs.get(run_id)
+    if entry is not None:
+        runner: EvalRunner = entry["runner"]
+        mem = runner.get_progress()
+        if mem:
+            return {"run_id": run_id, "progress": mem}
+        progress = _progress_from_disk(run_id)
+        if progress is not None:
+            return {"run_id": run_id, "progress": progress}
+        return {"run_id": run_id, "progress": {}}
+
+    progress = _progress_from_disk(run_id)
+    if progress is None:
+        raise HTTPException(404, f"Unknown run: {run_id}")
     return {"run_id": run_id, "progress": progress}
 
 
