@@ -534,6 +534,7 @@ svg.lucide{flex-shrink:0;stroke-width:2}
   border-radius:50%;animation:spin .65s linear infinite;
 }
 @keyframes spin{to{transform:rotate(360deg)}}
+.spin{animation:spin 1s linear infinite}
 
 /* ── Theme toggle ── */
 .theme-toggle{
@@ -710,10 +711,43 @@ svg.lucide{flex-shrink:0;stroke-width:2}
 .lb-table td.best{color:var(--green);font-weight:600}
 .lb-table tr:hover td{background:var(--panel-hover)}
 .lb-actions{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+.lb-search{position:relative;display:flex;align-items:center;flex:1;min-width:220px;max-width:360px;margin-left:auto}
+.lb-search>svg{position:absolute;left:9px;width:14px;height:14px;color:var(--text-mute);pointer-events:none;z-index:1}
+.lb-search input{
+  width:100%;height:30px;padding:0 30px 0 31px;
+  border:1px solid var(--border);border-radius:var(--radius);
+  background:var(--input-bg);color:var(--text);font-size:12px;
+  font-family:var(--font);outline:none;
+  transition:border-color var(--t-fast),box-shadow var(--t-fast);
+}
+.lb-search input::placeholder{color:var(--text-mute)}
+.lb-search input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-ring)}
+.lb-search .ms-clear{
+  position:absolute;right:4px;display:none;align-items:center;justify-content:center;
+  width:22px;height:22px;padding:0;border:none;border-radius:var(--radius-xs);
+  background:transparent;color:var(--text-mute);cursor:pointer;
+  transition:background var(--t-fast),color var(--t-fast);
+}
+.lb-search .ms-clear:hover{background:var(--panel-hover);color:var(--text)}
+.lb-search .ms-clear svg{width:12px;height:12px}
+.lb-filter-info{display:none;font-size:12px;color:var(--text-dim);margin:-6px 0 12px}
 .import-list{max-height:400px;overflow-y:auto}
 .import-item{display:flex;align-items:center;gap:8px;padding:8px;border-bottom:1px solid var(--border)}
 .import-item .ii-name{flex:1;font-size:12px}
 .import-item .ii-meta{font-size:11px;color:var(--text-dim)}
+.lb-export-modal{max-width:780px;width:min(92vw,780px)}
+#lbExportGroups{max-height:52vh;overflow-y:auto;padding-right:4px;margin-top:14px}
+.lb-export-group{border:1px solid var(--border);border-radius:var(--radius-lg);padding:10px 12px;margin-bottom:10px}
+.lb-export-group-head{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;cursor:pointer;user-select:none}
+.lb-export-group-head input{accent-color:var(--accent)}
+.lb-export-count{font-size:11px;color:var(--text-dim);font-weight:400}
+.lb-export-row{display:flex;align-items:flex-start;gap:8px;margin-top:8px;flex-wrap:wrap}
+.lb-export-label{font-size:11px;color:var(--text-dim);line-height:24px;min-width:42px;flex-shrink:0}
+.lb-export-chips{display:flex;flex-wrap:wrap;gap:6px}
+.lb-export-chip{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border:1px solid var(--border-strong);border-radius:999px;font-size:12px;cursor:pointer;background:var(--panel);transition:border-color .15s}
+.lb-export-chip:hover{border-color:var(--accent)}
+.lb-export-chip input{accent-color:var(--accent);margin:0}
+.lb-export-group.off .lb-export-chip{opacity:.45}
 
 .eval-detail-modal{max-width:900px}
 .eval-detail-modal .results-grid{display:grid;grid-template-columns:1fr;gap:6px;margin-top:12px}
@@ -864,14 +898,33 @@ svg.lucide{flex-shrink:0;stroke-width:2}
       <div class="eval-section">
         <h3><i data-lucide="trophy"></i>榜单</h3>
         <div class="lb-actions">
+          <div class="lb-search">
+            <i data-lucide="search"></i>
+            <input id="lbFilterInput" type="text" placeholder="筛选模型关键字…" oninput="onLbFilter(this.value)" autocomplete="off" spellcheck="false">
+            <button class="ms-clear" id="lbFilterClear" onclick="clearLbFilter()" title="清空筛选" aria-label="清空筛选"><i data-lucide="x"></i></button>
+          </div>
           <button class="btn primary" onclick="openImportModal()"><i data-lucide="download"></i>导入历史记录</button>
+          <button class="btn primary" onclick="openLbExportModal()"><i data-lucide="file-spreadsheet"></i>导出 Excel</button>
           <button class="btn ghost" onclick="loadLeaderboard()"><i data-lucide="refresh-cw"></i>刷新</button>
         </div>
+        <div id="lbFilterInfo" class="lb-filter-info"></div>
         <div id="lbContent"><div class="eval-empty"><i data-lucide="trophy"></i><div>尚无榜单数据</div></div></div>
       </div>
     </div>
   </div>
 </main>
+
+<!-- leaderboard export dialog -->
+<div class="modal-overlay" id="lbExportModal" style="display:none" onclick="closeLbExportModal(event)">
+  <div class="modal-box lb-export-modal" onclick="event.stopPropagation()">
+    <h3><i data-lucide="file-spreadsheet" class="h3-icon"></i>导出榜单 Excel</h3>
+    <div id="lbExportGroups"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeLbExportModal()"><i data-lucide="x"></i>取消</button>
+      <button class="btn primary" onclick="exportLbExcel(this)"><i data-lucide="download"></i>导出 Excel</button>
+    </div>
+  </div>
+</div>
 
 <!-- launch dialog -->
 <div class="modal-overlay" id="launchModal" style="display:none" onclick="closeLaunchModal(event)">
@@ -2255,6 +2308,7 @@ function downloadDetail(runId,filename){
 
 /* ── Leaderboard ── */
 let lbData=null;
+let lbModelFilter='';
 
 async function loadLeaderboard(){
   try{
@@ -2267,13 +2321,20 @@ function renderLeaderboard(){
   const c=$('lbContent');
   const cats=lbData.categories||{};
   const entries=lbData.entries||{};
+  const kw=lbModelFilter;
   let html='';
   let hasData=false;
+  let shownModels=0;
   for(const[ck,label]of Object.entries(cats)){
-    const items=entries[ck]||[];
+    let items=entries[ck]||[];
+    if(kw)items=items.filter(e=>
+      (e.model_name&&String(e.model_name).toLowerCase().includes(kw))||
+      (e.model_key&&String(e.model_key).toLowerCase().includes(kw))
+    );
     if(!items.length)continue;
     hasData=true;
     const models=[...new Set(items.map(e=>e.model_key))];
+    shownModels+=models.length;
     const benches=[...new Set(items.map(e=>e.bench_id+':'+e.bench_name))];
     // per-model avg
     const modelAvgs={};
@@ -2318,11 +2379,36 @@ function renderLeaderboard(){
     html+='</tbody></table></div></div>';
   }
   if(!hasData){
-    c.innerHTML='<div class="eval-empty"><i data-lucide="trophy"></i><div>尚无榜单数据，点“导入历史记录”</div></div>';
+    c.innerHTML=kw
+      ? '<div class="eval-empty"><i data-lucide="search-x"></i><div>没有匹配“'+escapeHtml(kw)+'”的模型</div></div>'
+      : '<div class="eval-empty"><i data-lucide="trophy"></i><div>尚无榜单数据，点“导入历史记录”</div></div>';
   }else{
     c.innerHTML=html;
   }
+  const info=$('lbFilterInfo');
+  if(info){
+    if(kw){
+      info.style.display='block';
+      info.textContent='筛选“'+kw+'”：共 '+shownModels+' 个匹配模型';
+    }else{
+      info.style.display='none';
+    }
+  }
   if(window.lucide)lucide.createIcons();
+}
+
+function onLbFilter(v){
+  lbModelFilter=(v||'').trim().toLowerCase();
+  const clear=$('lbFilterClear');
+  if(clear)clear.style.display=lbModelFilter?'flex':'none';
+  renderLeaderboard();
+}
+
+function clearLbFilter(){
+  const inp=$('lbFilterInput');
+  if(inp)inp.value='';
+  onLbFilter('');
+  if(inp)inp.focus();
 }
 
 async function openImportModal(){
@@ -2372,6 +2458,103 @@ async function deleteLbEntries(category,modelKey){
     }
     loadLeaderboard();
   }catch(e){alert('Failed: '+e)}
+}
+
+async function openLbExportModal(){
+  if(!lbData)await loadLeaderboard();
+  const c=$('lbExportGroups');
+  if(!c||!lbData)return;
+  const cats=lbData.categories||{};
+  const entries=lbData.entries||{};
+  let html='';
+  for(const[ck,label]of Object.entries(cats)){
+    const items=entries[ck]||[];
+    if(!items.length)continue;
+    const benches=[];
+    items.forEach(e=>{
+      const bid=e.bench_id,bn=e.bench_name;
+      if(!benches.some(b=>b.id===bid))benches.push({id:bid,name:bn||bid});
+    });
+    const models=[];
+    items.forEach(e=>{
+      const mk=e.model_key;
+      if(!models.some(m=>m.key===mk))models.push({key:mk,name:e.model_name||mk});
+    });
+    html+='<div class="lb-export-group" data-cat="'+escapeHtml(ck)+'">'+
+      '<label class="lb-export-group-head"><input type="checkbox" class="lb-export-cat-check" checked onchange="toggleLbExportCat(this)">'+escapeHtml(label)+' <span class="lb-export-count">'+items.length+' 条记录</span></label>'+
+      '<div class="lb-export-row"><span class="lb-export-label">Bench</span><div class="lb-export-chips">';
+    benches.forEach(b=>{
+      html+='<label class="lb-export-chip"><input type="checkbox" data-kind="bench" value="'+escapeHtml(b.id)+'" checked>'+escapeHtml(b.name)+'</label>';
+    });
+    html+='</div></div><div class="lb-export-row"><span class="lb-export-label">模型</span><div class="lb-export-chips">';
+    models.forEach(m=>{
+      html+='<label class="lb-export-chip"><input type="checkbox" data-kind="model" value="'+escapeHtml(m.key)+'" checked>'+escapeHtml(m.name)+'</label>';
+    });
+    html+='</div></div></div>';
+  }
+  if(!html){alert('没有可导出的榜单数据');return}
+  c.innerHTML=html;
+  $('lbExportModal').style.display='flex';
+  if(window.lucide)lucide.createIcons();
+}
+
+function toggleLbExportCat(cb){
+  const g=cb.closest('.lb-export-group');
+  if(!g)return;
+  g.classList.toggle('off',!cb.checked);
+  g.querySelectorAll('.lb-export-chip input').forEach(i=>{i.disabled=!cb.checked});
+}
+
+function closeLbExportModal(e){
+  const m=$('lbExportModal');
+  if(!m)return;
+  if(e&&e.target!==m)return;
+  m.style.display='none';
+}
+
+async function exportLbExcel(btn){
+  const groups=[];
+  document.querySelectorAll('#lbExportGroups .lb-export-group').forEach(g=>{
+    if(!g.querySelector('.lb-export-cat-check').checked)return;
+    const benches=[...g.querySelectorAll('.lb-export-chip input[data-kind="bench"]:checked')].map(i=>i.value);
+    const models=[...g.querySelectorAll('.lb-export-chip input[data-kind="model"]:checked')].map(i=>i.value);
+    if(benches.length&&models.length)groups.push({category:g.dataset.cat,benches,models});
+  });
+  if(!groups.length){alert('请至少选择一个榜单组及其中的 bench 和模型');return}
+  const oldHtml=btn.innerHTML;
+  btn.disabled=true;
+  btn.innerHTML='<i data-lucide="loader-circle" class="spin"></i>导出中…';
+  if(window.lucide)lucide.createIcons();
+  try{
+    const res=await fetch('/api/eval/leaderboard/export',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({groups})
+    });
+    if(!res.ok){
+      let msg='导出失败 ('+res.status+')';
+      try{const d=await res.json();if(d&&d.detail)msg=String(d.detail)}catch(e){}
+      throw new Error(msg);
+    }
+    const blob=await res.blob();
+    const cd=res.headers.get('Content-Disposition')||'';
+    const m=cd.match(/filename="?([^";]+)"?/);
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url;
+    a.download=m?m[1]:('leaderboard_export_'+Date.now()+'.xlsx');
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),2000);
+    $('lbExportModal').style.display='none';
+  }catch(e){
+    alert(e.message||String(e));
+  }finally{
+    btn.disabled=false;
+    btn.innerHTML=oldHtml;
+    if(window.lucide)lucide.createIcons();
+  }
 }
 
 /* ── Init ── */

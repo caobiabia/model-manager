@@ -21,7 +21,7 @@ from queue import Empty, Queue
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 _workspace = Path(__file__).resolve().parents[1]
@@ -1302,6 +1302,37 @@ async def eval_lb_delete(entry_id: str):
 async def eval_lb_clear():
     n = _eval_lb.clear_all()
     return {"ok": True, "deleted": n}
+
+
+class LbExportGroup(BaseModel):
+    category: str
+    benches: list[str] = []
+    models: list[str] = []
+
+
+class LbExportRequest(BaseModel):
+    groups: list[LbExportGroup]
+
+
+@app.post("/api/eval/leaderboard/export")
+async def eval_lb_export(req: LbExportRequest) -> Response:
+    """Export selected leaderboard groups (category / bench / model) to xlsx."""
+    groups = [
+        {"category": g.category, "benches": g.benches, "models": g.models}
+        for g in req.groups
+    ]
+    data = _eval_lb.export_to_xlsx(groups)
+    if not data:
+        raise HTTPException(
+            400,
+            "没有可导出的数据：请至少选择一个榜单组及其中的 bench 和模型",
+        )
+    filename = f"leaderboard_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    return Response(
+        data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 

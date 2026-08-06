@@ -181,3 +181,155 @@ def clear_all() -> int:
     count = len(_load())
     _save([])
     return count
+
+
+def export_to_xlsx(groups: list[dict[str, Any]]) -> bytes:
+    """Build an xlsx workbook for selected leaderboard groups.
+
+    Each group dict supports:
+      category: leaderboard category key (e.g. "hard", "general")
+      benches:  optional list of bench_ids; empty means all in the category
+      models:   optional list of model_keys; empty means all in the category
+
+    Returns the workbook as bytes, or b"" when nothing matches.
+    """
+    from io import BytesIO
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.utils import get_column_letter
+
+    labels = get_leaderboard()["categories"]
+    entries = _load()
+    wb = Workbook()
+    wb.remove(wb.active)
+
+    thin = Side(style="thin", color="D9D9D9")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill("solid", fgColor="2F5B9E")
+    best_font = Font(bold=True, color="1E7B34")
+    center = Alignment(horizontal="center", vertical="center")
+
+    def sanitize_sheet(title: str) -> str:
+        for ch in '[]:*?/\\':
+            title = title.replace(ch, "-")
+        title = title.strip() or "leaderboard"
+        return title[:31]
+
+    used_titles: set[str] = set()
+
+    for group in groups:
+        cat = group.get("category", "")
+        wanted_benches = group.get("benches") or None
+        wanted_models = group.get("models") or None
+        items = [e for e in entries if e.get("category") == cat]
+        if wanted_benches:
+            wanted = set(wanted_benches)
+            items = [e for e in items if e.get("bench_id") in wanted]
+        if wanted_models:
+            wanted = set(wanted_models)
+            items = [e for e in items if e.get("model_key") in wanted]
+        if not items:
+            continue
+
+        bench_order: list[str] = []
+        for e in items:
+            bid = e.get("bench_id", "")
+            if bid not in bench_order:
+                bench_order.append(bid)
+        model_order: list[str] = []
+        for e in items:
+            mk = e.get("model_key", "")
+            if mk not in model_order:
+                model_order.append(mk)
+
+        avg_cache: dict[str, float | None] = {}
+
+        def avg_acc(mk: str) -> float | None:
+            if mk not in avg_cache:
+                accs = [
+                    e["accuracy"] for e in items
+                    if e.get("model_key") == mk and isinstance(e.get("accuracy"), (int, float))
+                ]
+                avg_cache[mk] = sum(accs) / len(accs) if accs else None
+            return avg_cache[mk]
+
+        model_order.sort(
+            key=lambda mk: avg_acc(mk) if avg_acc(mk) is not None else -1.0,
+            reverse=True,
+        )
+
+        bench_best: dict[str, float | None] = {}
+        for bid in bench_order:
+            vals = [
+                e["accuracy"] for e in items
+                if e.get("bench_id") == bid and isinstance(e.get("accuracy"), (int, float))
+            ]
+            bench_best[bid] = max(vals) if vals else None
+
+        base_title = sanitize_sheet(labels.get(cat, cat))
+        title = base_title
+        n = 2
+        while title in used_titles:
+            suffix = f"-{n}"
+            title = base_title[: 31 - len(suffix)] + suffix
+            n += 1
+        used_titles.add(title)
+
+        ws = wb.create_sheet(title=title)
+        headers = ["模型", "Avg"]
+        for bid in bench_order:
+            e = next((e for e in items if e.get("bench_id") == bid), None)
+            headers.append(e.get("bench_name", bid) if e else bid)
+        ws.append(headers)
+        for ci in range(1, len(headers) + 1):
+            cell = ws.cell(row=1, column=ci)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = center
+            cell.border = border
+
+        def first_entry(mk: str, bid: str):
+            return next(
+                (e for e in items if e.get("model_key") == mk and e.get("bench_id") == bid),
+                None,
+            )
+
+        for mk in model_order:
+            e0 = first_entry(mk, bench_order[0]) if bench_order else None
+            row = [e0.get("model_name", mk) if e0 else mk, avg_acc(mk)]
+            for bid in bench_order:
+                e = first_entry(mk, bid)
+                acc = e.get("accuracy") if e and isinstance(e.get("accuracy"), (int, float)) else None
+                row.append(acc)
+            ws.append(row)
+            r = ws.max_row
+            ws.cell(row=r, column=1).font = Font(bold=True)
+            avg_cell = ws.cell(row=r, column=2)
+            if isinstance(avg_cell.value, (int, float)):
+                avg_cell.number_format = '0.0"%"'
+            for ci, bid in enumerate(bench_order, start=3):
+                cell = ws.cell(row=r, column=ci)
+                if isinstance(cell.value, (int, float)):
+                    cell.number_format = '0.0"%"'
+                    if (
+                        bench_best[bid] is not None
+                        and cell.value == bench_best[bid]
+                        and cell.value > 0
+                    ):
+                        cell.font = best_font
+            for ci in range(1, len(headers) + 1):
+                ws.cell(row=r, column=ci).border = border
+
+        ws.column_dimensions["A"].width = 34
+        ws.column_dimensions["B"].width = 10
+        for ci in range(3, len(headers) + 1):
+            ws.column_dimensions[get_column_letter(ci)].width = 16
+        ws.freeze_panes = "C2"
+
+    if not wb.sheetnames:
+        return b""
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
