@@ -22,6 +22,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 _workspace = Path(__file__).resolve().parents[1]
@@ -71,6 +72,7 @@ def _save_description(key: str, description: str) -> None:
 
 
 app = FastAPI(title="CSP Model Manager")
+app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
 
 _procs: dict[str, subprocess.Popen] = {}
 _log_queues: dict[str, Queue] = {}
