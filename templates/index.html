@@ -1049,7 +1049,10 @@ async function loadGpus(){
     gpusCache=await(await fetch('/api/gpus')).json();
     renderGpus();
     populateLaunchGpu();
-  }catch(e){}
+    return true;
+  }catch(e){
+    return false;
+  }
 }
 function fmtG(n){return ((n||0)/1024).toFixed(1)}
 function renderGpus(){
@@ -1451,15 +1454,20 @@ function newChat(){
 /* ── Launch ── */
 let currentLaunchModel=null;
 async function openLaunch(key,name){
-  try{await loadGpus()}catch(e){alert('加载GPU信息失败: '+e.message);return}
   launchingKey=key;
   $('launchModelName').textContent=name;$('launchLog').textContent='';
-  $('launchBtn').disabled=false;
+  $('launchBtn').disabled=true;
+  $('launchModal').style.display='flex';
+  if(gpusCache.length)populateLaunchGpu();
+  onLaunchGpuChange();
+  const gpuOk=await loadGpus();
+  if(!gpuOk&&!gpusCache.length)$('launchLog').textContent='加载 GPU 信息失败';
   if(!$('launchGpu').value){
     $('launchBtn').disabled=true;
     $('launchLog').textContent='所有 GPU 剩余显存不足，请先释放显存';
+  }else{
+    $('launchBtn').disabled=false;
   }
-  $('launchModal').style.display='flex';
   onLaunchGpuChange();
   // Fetch model info to detect LoRA config
   try{

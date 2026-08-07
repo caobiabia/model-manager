@@ -79,6 +79,9 @@ _log_history: dict[str, list[str]] = {}  # accumulated log lines
 _locks: dict[str, asyncio.Lock] = {}     # per-model lock for launch / stop
 _thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=8)
 _desc_lock = threading.Lock()
+_GPU_CACHE_TTL = 3.0  # seconds; /api/gpus is polled every 2s from the frontend
+_gpu_cache: tuple[float, list[dict[str, Any]]] | None = None
+_gpu_cache_lock = threading.Lock()
 
 
 # ——— port / GPU scanning ————
@@ -166,19 +169,23 @@ def _gpu_process_details() -> dict[int, list[dict]]:
             r = subprocess.run(args, capture_output=True, text=True, timeout=10)
             return r.stdout
 
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            uuid_out = pool.submit(_run, [
+                "nvidia-smi", "--query-gpu=index,uuid", "--format=csv,noheader,nounits",
+            ]).result(timeout=12)
+            apps_out = pool.submit(_run, [
+                "nvidia-smi", "--query-compute-apps=gpu_uuid,pid,used_memory",
+                "--format=csv,noheader,nounits",
+            ]).result(timeout=12)
+
         uuid2idx: dict[str, int] = {}
-        for line in _run([
-            "nvidia-smi", "--query-gpu=index,uuid", "--format=csv,noheader,nounits",
-        ]).strip().splitlines():
+        for line in uuid_out.strip().splitlines():
             parts = [p.strip() for p in line.split(",")]
             if len(parts) >= 2 and parts[0].isdigit():
                 uuid2idx[parts[1]] = int(parts[0])
 
         apps: list[tuple[str, int, int]] = []
-        for line in _run([
-            "nvidia-smi", "--query-compute-apps=gpu_uuid,pid,used_memory",
-            "--format=csv,noheader,nounits",
-        ]).strip().splitlines():
+        for line in apps_out.strip().splitlines():
             parts = [p.strip() for p in line.split(",")]
             if len(parts) >= 3 and parts[1].isdigit():
                 used = int(parts[2]) if parts[2].isdigit() else 0
@@ -746,49 +753,67 @@ async def stream_log(model_key: str, request: Request):
 
 # ——— GPUs ————
 
+def _query_gpu_status() -> list[dict[str, Any]]:
+    """Run the nvidia-smi summary and per-process queries concurrently."""
+    def _main_query() -> str:
+        r = subprocess.run(
+            ["nvidia-smi",
+             "--query-gpu=index,name,memory.total,memory.used,memory.free,"
+             "utilization.gpu,temperature.gpu,power.draw,power.limit",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=10,
+        )
+        return r.stdout
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        main_fut = pool.submit(_main_query)
+        proc_fut = pool.submit(_gpu_process_details)
+        out = main_fut.result(timeout=12)
+        process_map = proc_fut.result(timeout=12)
+
+    gpus: list[dict[str, Any]] = []
+    for line in out.strip().split("\n"):
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) < 5:
+            continue
+
+        def _num(v: str) -> float | None:
+            try:
+                return float(v)
+            except ValueError:
+                return None
+
+        idx = int(parts[0])
+        gpus.append({
+            "index": idx,
+            "name": parts[1],
+            "total_mb": int(parts[2]),
+            "used_mb": int(parts[3]),
+            "free_mb": int(parts[4]),
+            "utilization_percent": _num(parts[5]),
+            "temperature_c": _num(parts[6]),
+            "power_w": _num(parts[7]),
+            "power_limit_w": _num(parts[8]),
+            "processes": process_map.get(idx, []),
+        })
+    return gpus
+
+
 @app.get("/api/gpus")
 async def gpu_status() -> list[dict[str, Any]]:
+    global _gpu_cache
+    now = time.monotonic()
+    with _gpu_cache_lock:
+        if _gpu_cache is not None and now - _gpu_cache[0] < _GPU_CACHE_TTL:
+            return _gpu_cache[1]
     try:
         loop = asyncio.get_running_loop()
-        r = await loop.run_in_executor(
-            _thread_pool,
-            lambda: subprocess.run(
-                ["nvidia-smi",
-                 "--query-gpu=index,name,memory.total,memory.used,memory.free,"
-                 "utilization.gpu,temperature.gpu,power.draw,power.limit",
-                 "--format=csv,noheader,nounits"],
-                capture_output=True, text=True, timeout=10,
-            ),
-        )
-        process_map = await loop.run_in_executor(_thread_pool, _gpu_process_details)
-        gpus: list[dict[str, Any]] = []
-        for line in r.stdout.strip().split("\n"):
-            parts = [p.strip() for p in line.split(",")]
-            if len(parts) < 5:
-                continue
-
-            def _num(v: str) -> float | None:
-                try:
-                    return float(v)
-                except ValueError:
-                    return None
-
-            idx = int(parts[0])
-            gpus.append({
-                "index": idx,
-                "name": parts[1],
-                "total_mb": int(parts[2]),
-                "used_mb": int(parts[3]),
-                "free_mb": int(parts[4]),
-                "utilization_percent": _num(parts[5]),
-                "temperature_c": _num(parts[6]),
-                "power_w": _num(parts[7]),
-                "power_limit_w": _num(parts[8]),
-                "processes": process_map.get(idx, []),
-            })
-        return gpus
+        gpus = await loop.run_in_executor(_thread_pool, _query_gpu_status)
     except Exception as e:
         raise HTTPException(500, f"GPU query failed: {e}")
+    with _gpu_cache_lock:
+        _gpu_cache = (time.monotonic(), gpus)
+    return gpus
 
 
 # ——— health ————
