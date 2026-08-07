@@ -711,6 +711,13 @@ svg.lucide{flex-shrink:0;stroke-width:2}
 .lb-table td.best{color:var(--green);font-weight:600}
 .lb-table tr:hover td{background:var(--panel-hover)}
 .lb-actions{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+.lb-avg-mode{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--text-dim);white-space:nowrap}
+.lb-avg-mode select{
+  height:30px;padding:0 8px;border:1px solid var(--border);border-radius:var(--radius);
+  background:var(--input-bg);color:var(--text);font-size:12px;font-family:var(--font);
+  outline:none;cursor:pointer;transition:border-color var(--t-fast);
+}
+.lb-avg-mode select:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-ring)}
 .lb-search{position:relative;display:flex;align-items:center;flex:1;min-width:220px;max-width:360px;margin-left:auto}
 .lb-search>svg{position:absolute;left:9px;width:14px;height:14px;color:var(--text-mute);pointer-events:none;z-index:1}
 .lb-search input{
@@ -748,6 +755,12 @@ svg.lucide{flex-shrink:0;stroke-width:2}
 .lb-export-chip:hover{border-color:var(--accent)}
 .lb-export-chip input{accent-color:var(--accent);margin:0}
 .lb-export-group.off .lb-export-chip{opacity:.45}
+.lb-export-avg{display:flex;align-items:center;gap:8px;margin-top:14px;font-size:12px;color:var(--text-dim)}
+.lb-export-avg select{
+  height:30px;padding:0 8px;border:1px solid var(--border);border-radius:var(--radius);
+  background:var(--input-bg);color:var(--text);font-size:12px;font-family:var(--font);
+  outline:none;cursor:pointer;
+}
 
 .eval-detail-modal{max-width:900px}
 .eval-detail-modal .results-grid{display:grid;grid-template-columns:1fr;gap:6px;margin-top:12px}
@@ -898,6 +911,13 @@ svg.lucide{flex-shrink:0;stroke-width:2}
       <div class="eval-section">
         <h3><i data-lucide="trophy"></i>榜单</h3>
         <div class="lb-actions">
+          <div class="lb-avg-mode">
+            <span title="切换 Avg 计算方式">Avg</span>
+            <select id="lbAvgMode" onchange="onLbAvgModeChange(this.value)" title="切换平均方式">
+              <option value="simple">普通平均</option>
+              <option value="weighted">加权平均</option>
+            </select>
+          </div>
           <div class="lb-search">
             <i data-lucide="search"></i>
             <input id="lbFilterInput" type="text" placeholder="筛选模型关键字…" oninput="onLbFilter(this.value)" autocomplete="off" spellcheck="false">
@@ -918,6 +938,13 @@ svg.lucide{flex-shrink:0;stroke-width:2}
 <div class="modal-overlay" id="lbExportModal" style="display:none" onclick="closeLbExportModal(event)">
   <div class="modal-box lb-export-modal" onclick="event.stopPropagation()">
     <h3><i data-lucide="file-spreadsheet" class="h3-icon"></i>导出榜单 Excel</h3>
+    <div class="lb-export-avg">
+      <label for="lbExportAvgMode">平均方式</label>
+      <select id="lbExportAvgMode">
+        <option value="simple">普通平均</option>
+        <option value="weighted">加权平均</option>
+      </select>
+    </div>
     <div id="lbExportGroups"></div>
     <div class="modal-actions">
       <button class="btn" onclick="closeLbExportModal()"><i data-lucide="x"></i>取消</button>
@@ -2309,6 +2336,7 @@ function downloadDetail(runId,filename){
 /* ── Leaderboard ── */
 let lbData=null;
 let lbModelFilter='';
+let lbAvgMode='simple';
 
 async function loadLeaderboard(){
   try{
@@ -2337,11 +2365,21 @@ function renderLeaderboard(){
     shownModels+=models.length;
     const benches=[...new Set(items.map(e=>e.bench_id+':'+e.bench_name))];
     // per-model avg
+    const avgOf=mk=>{
+      const es=items.filter(e=>e.model_key===mk&&Number.isFinite(e.accuracy));
+      if(!es.length)return null;
+      if(lbAvgMode==='weighted'){
+        let ws=0,wc=0;
+        es.forEach(e=>{
+          const w=(Number.isFinite(e.processed)&&e.processed>0)?e.processed:1;
+          ws+=e.accuracy*w;wc+=w;
+        });
+        return ws/wc;
+      }
+      return es.reduce((s,e)=>s+e.accuracy,0)/es.length;
+    };
     const modelAvgs={};
-    models.forEach(mk=>{
-      const accs=items.filter(e=>e.model_key===mk).map(e=>e.accuracy).filter(a=>Number.isFinite(a));
-      modelAvgs[mk]=accs.length?(accs.reduce((a,b)=>a+b,0)/accs.length):null;
-    });
+    models.forEach(mk=>{modelAvgs[mk]=avgOf(mk)});
     models.sort((a,b)=>(modelAvgs[b]??-1)-(modelAvgs[a]??-1));
     // per-bench best across ALL models (for bold highlighting)
     const benchBest={};
@@ -2351,7 +2389,7 @@ function renderLeaderboard(){
       benchBest[bid]=all.length?Math.max(...all):null;
     });
     html+='<div class="lb-section"><h3><i data-lucide="trophy"></i>'+escapeHtml(label)+' ('+models.length+' 模型, '+benches.length+' bench)</h3>';
-    html+='<div style="overflow-x:auto"><table class="lb-table"><thead><tr><th>模型</th><th>Avg</th>';
+    html+='<div style="overflow-x:auto"><table class="lb-table"><thead><tr><th>模型</th><th title="'+(lbAvgMode==='weighted'?'加权平均（按题量）':'普通平均（各 bench 等权）')+'">Avg'+(lbAvgMode==='weighted'?'*':'')+'</th>';
     benches.forEach(b=>{
       const[name,id]=b.split(':');
       html+='<th title="'+escapeHtml(id)+'">'+escapeHtml(name)+'</th>';
@@ -2401,6 +2439,11 @@ function onLbFilter(v){
   lbModelFilter=(v||'').trim().toLowerCase();
   const clear=$('lbFilterClear');
   if(clear)clear.style.display=lbModelFilter?'flex':'none';
+  renderLeaderboard();
+}
+
+function onLbAvgModeChange(v){
+  lbAvgMode=v;
   renderLeaderboard();
 }
 
@@ -2494,6 +2537,8 @@ async function openLbExportModal(){
   }
   if(!html){alert('没有可导出的榜单数据');return}
   c.innerHTML=html;
+  const avgSel=$('lbExportAvgMode');
+  if(avgSel)avgSel.value=lbAvgMode;
   $('lbExportModal').style.display='flex';
   if(window.lucide)lucide.createIcons();
 }
@@ -2521,6 +2566,7 @@ async function exportLbExcel(btn){
     if(benches.length&&models.length)groups.push({category:g.dataset.cat,benches,models});
   });
   if(!groups.length){alert('请至少选择一个榜单组及其中的 bench 和模型');return}
+  const avgMode=$('lbExportAvgMode')?$('lbExportAvgMode').value:'simple';
   const oldHtml=btn.innerHTML;
   btn.disabled=true;
   btn.innerHTML='<i data-lucide="loader-circle" class="spin"></i>导出中…';
@@ -2529,7 +2575,7 @@ async function exportLbExcel(btn){
     const res=await fetch('/api/eval/leaderboard/export',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({groups})
+      body:JSON.stringify({avg_mode:avgMode,groups})
     });
     if(!res.ok){
       let msg='导出失败 ('+res.status+')';

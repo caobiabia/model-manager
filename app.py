@@ -1312,16 +1312,19 @@ class LbExportGroup(BaseModel):
 
 class LbExportRequest(BaseModel):
     groups: list[LbExportGroup]
+    avg_mode: str = "simple"
 
 
 @app.post("/api/eval/leaderboard/export")
 async def eval_lb_export(req: LbExportRequest) -> Response:
     """Export selected leaderboard groups (category / bench / model) to xlsx."""
+    if req.avg_mode not in ("simple", "weighted"):
+        raise HTTPException(400, "avg_mode 只能是 simple 或 weighted")
     groups = [
         {"category": g.category, "benches": g.benches, "models": g.models}
         for g in req.groups
     ]
-    data = _eval_lb.export_to_xlsx(groups)
+    data = _eval_lb.export_to_xlsx(groups, avg_mode=req.avg_mode)
     if not data:
         raise HTTPException(
             400,

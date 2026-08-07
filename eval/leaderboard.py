@@ -183,13 +183,17 @@ def clear_all() -> int:
     return count
 
 
-def export_to_xlsx(groups: list[dict[str, Any]]) -> bytes:
+def export_to_xlsx(groups: list[dict[str, Any]], avg_mode: str = "simple") -> bytes:
     """Build an xlsx workbook for selected leaderboard groups.
 
     Each group dict supports:
       category: leaderboard category key (e.g. "hard", "general")
       benches:  optional list of bench_ids; empty means all in the category
       models:   optional list of model_keys; empty means all in the category
+
+    avg_mode is "simple" (arithmetic mean) or "weighted" (weighted by the
+    processed question count of each bench; entries without a valid processed
+    count fall back to a weight of 1).
 
     Returns the workbook as bytes, or b"" when nothing matches.
     """
@@ -248,11 +252,25 @@ def export_to_xlsx(groups: list[dict[str, Any]]) -> bytes:
 
         def avg_acc(mk: str) -> float | None:
             if mk not in avg_cache:
-                accs = [
-                    e["accuracy"] for e in items
-                    if e.get("model_key") == mk and isinstance(e.get("accuracy"), (int, float))
+                es = [
+                    e for e in items
+                    if e.get("model_key") == mk
+                    and isinstance(e.get("accuracy"), (int, float))
                 ]
-                avg_cache[mk] = sum(accs) / len(accs) if accs else None
+                if not es:
+                    avg_cache[mk] = None
+                elif avg_mode == "weighted":
+                    wsum = 0.0
+                    wcnt = 0.0
+                    for e in es:
+                        w = e.get("processed")
+                        if not isinstance(w, (int, float)) or w <= 0:
+                            w = 1
+                        wsum += e["accuracy"] * w
+                        wcnt += w
+                    avg_cache[mk] = wsum / wcnt
+                else:
+                    avg_cache[mk] = sum(e["accuracy"] for e in es) / len(es)
             return avg_cache[mk]
 
         model_order.sort(
