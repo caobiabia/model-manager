@@ -315,10 +315,9 @@ class EvalRunner:
 
         initial_done = min(len(processed_ids), total) if total > 0 else len(processed_ids)
         initial_correct = sum(1 for r in results if r.get("correct") is True)
-        initial_scored = sum(1 for r in results if r.get("correct") is not None)
         initial_acc = (
-            round(initial_correct / initial_scored * 100, 2)
-            if initial_scored else None
+            round(initial_correct / initial_done * 100, 2)
+            if initial_done else None
         )
         pk = f"{model_key}|{bench_id}"
         with self._progress_lock:
@@ -341,8 +340,8 @@ class EvalRunner:
         if not to_process:
             # All already processed (resume)
             correct = sum(1 for r in results if r.get("correct") is True)
-            scored = sum(1 for r in results if r.get("correct") is not None)
-            acc = round(correct / scored * 100, 2) if scored else None
+            n = len(results)
+            acc = round(correct / n * 100, 2) if n else None
             self.results[(model_key, bench_id)] = {
                 "model_key": model_key, "bench_id": bench_id,
                 "bench_name": bench.name, "mode": self.mode,
@@ -525,13 +524,10 @@ class EvalRunner:
                 correct_count = sum(
                     1 for r in results if r.get("correct") is True
                 )
-                scored_count = sum(
-                    1 for r in results if r.get("correct") is not None
-                )
                 processed_count = len(results)
                 acc = (
-                    round(correct_count / scored_count * 100, 1)
-                    if scored_count > 0 else None
+                    round(correct_count / processed_count * 100, 1)
+                    if processed_count > 0 else None
                 )
 
                 elapsed = time.time() - start_time
@@ -559,11 +555,10 @@ class EvalRunner:
 
         elapsed = time.time() - start_time
         correct_count = sum(1 for r in results if r.get("correct") is True)
-        scored_count = sum(1 for r in results if r.get("correct") is not None)
         processed_count = len(results)
         accuracy = (
-            round(correct_count / scored_count * 100, 2)
-            if scored_count > 0 else None
+            round(correct_count / processed_count * 100, 2)
+            if processed_count > 0 else None
         )
         total_prompt = sum(
             r.get("token_usage", {}).get("prompt_tokens", 0) for r in results
