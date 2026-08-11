@@ -150,6 +150,10 @@ class EvalRunner:
 
             self._save_config()
 
+            # MCQ answer extraction is model-only: require the extractor
+            # up front so a missing config fails the run immediately.
+            ext_client, ext_model, ext_deepseek = get_extract_model()
+
             # Run all models in parallel -- each model gets its own
             # thread, and within each model all benches run concurrently.
             # This works well when models are on different GPUs.
@@ -157,7 +161,10 @@ class EvalRunner:
             for model_key in self.model_keys:
                 if self.stopped:
                     break
-                t = threading.Thread(target=self._run_model, args=(model_key,))
+                t = threading.Thread(
+                    target=self._run_model,
+                    args=(model_key, ext_client, ext_model, ext_deepseek),
+                )
                 model_threads.append(t)
                 t.start()
             for t in model_threads:
@@ -185,7 +192,13 @@ class EvalRunner:
 
     # -- per-model --------------------------------------------------------
 
-    def _run_model(self, model_key: str) -> None:
+    def _run_model(
+        self,
+        model_key: str,
+        ext_client,
+        ext_model: str,
+        ext_deepseek: bool,
+    ) -> None:
         cfg = get_model_by_name(model_key)
         if cfg is None:
             self.queue.put({
@@ -195,7 +208,6 @@ class EvalRunner:
             return
 
         client, model_name, is_deepseek = create_client(cfg)
-        ext_client, ext_model, ext_deepseek = get_extract_model()
 
         self.queue.put({
             "type": "model_start",
@@ -403,7 +415,6 @@ class EvalRunner:
                 if pred is None:
                     pred = extract_answer(
                         reasoning, options, ext_client, ext_model, ext_deepseek,
-                        strict=True,
                     )
 
             correct = None

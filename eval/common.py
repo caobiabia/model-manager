@@ -88,17 +88,18 @@ def create_client(cfg: dict) -> tuple[OpenAI, str, bool]:
     return client, cfg["served_model_name"], is_deepseek
 
 
-def get_extract_model() -> tuple[OpenAI | None, str | None, bool]:
-    """Return ``(client, model_name, is_deepseek)`` for the extraction step.
+def get_extract_model() -> tuple[OpenAI, str, bool]:
+    """Return ``(client, model_name, is_deepseek)`` for answer extraction.
 
-    Falls back to ``(None, None, False)`` (regex-only) when DeepSeek
-    is not configured.
+    Uses the locally-launched DeepSeek-V4-Flash vLLM instance in
+    non-reasoning mode (temporary switch from the remote DeepSeek API).
+    The extraction model is mandatory: MCQ answers must be extracted by an
+    LLM extractor, so a missing local instance raises an error instead of
+    silently falling back to regex.
     """
-    ds_cfg = MODELS.get("deepseek")
-    if ds_cfg and ds_cfg.get("api_key"):
-        client = OpenAI(api_key=ds_cfg["api_key"], base_url=ds_cfg["base_url"])
-        return client, ds_cfg["served_model_name"], True
-    return None, None, False
+    base_url = "http://localhost:26006/v1"
+    model_name = "DeepSeek-V4-Flash"
+    return OpenAI(api_key="not-needed", base_url=base_url), model_name, True
 
 
 # -- model calling ---------------------------------------------------------
@@ -158,59 +159,6 @@ def call_model(
 
 
 # -- answer extraction -----------------------------------------------------
-
-
-def extract_answer_regex(text: str, options: dict, strict: bool = False) -> str | None:
-    """Extract answer letter from text using regex.
-
-    Handles JSON objects, Chinese answer patterns, bare single
-    letters, and English option-key search -- works for both the English
-    MedicalAgentsBench prompts and the Chinese subset. In *strict* mode
-    the loose English tail search is disabled, so a truncated thinking
-    trace cannot yield a bogus answer from a stray option letter.
-    """
-    if not text:
-        return None
-    text = text.strip()
-
-    # strip markdown code fences
-    clean = re.sub(r"```(?:json)?\s*\n?", "", text)
-    clean = re.sub(r"```", "", clean).strip()
-
-    # JSON parse
-    try:
-        data = json.loads(clean)
-        if isinstance(data, list):
-            data = data[0] if data else {}
-        if isinstance(data, dict):
-            ans = str(data.get("answer", data.get("answer_idx", ""))).strip().upper()
-            if ans and re.match(r"^[A-E]$", ans):
-                return ans
-    except (json.JSONDecodeError, AttributeError, IndexError):
-        pass
-
-    # explicit JSON pattern  {"answer": "B"}  or  {"answer_idx": "B"}
-    m = re.search(r'\{\s*"answer(?:_idx)?"\s*:\s*"([A-E])"\s*\}', text, re.IGNORECASE)
-    if m:
-        return m.group(1).upper()
-
-    # Chinese pattern
-    m = re.search(r"(?:\u6b63\u786e)?\u7b54\u6848[\u662f\u4e3a\uff1a:\s]*\**\s*([A-E])\b", text)
-    if m:
-        return m.group(1).upper()
-
-    # bare single letter
-    m = re.match(r"^\s*([A-E])\s*$", text)
-    if m:
-        return m.group(1).upper()
-
-    # English fallback: search for option keys in the tail of the response.
-    if not strict:
-        tail = text[-500:]
-        for key in options:
-            if re.search(rf"\b{re.escape(key)}\b", tail):
-                return key
-    return None
 
 
 def _normalize_number(s: str) -> str:
@@ -307,36 +255,90 @@ def extract_patch(text: str) -> str | None:
     return None
 
 
-def extract_answer(
-    raw_response: str,
-    options: dict,
-    extract_client: OpenAI | None = None,
-    extract_model: str | None = None,
-    is_deepseek: bool = False,
-    retries: int = 3,
-    strict: bool = False,
-) -> str | None:
-    """Unified answer extraction: model-based -> regex fallback.
+_MAX_EXTRACT_INPUT_CHARS = 32768
+_EXTRACT_TRUNC_MARKER = "\n...[truncated]...\n"
+_EXTRACT_ANSWER_MARKER_RE = re.compile(
+    r"(?:The\s+correct\s+answer\s+is|Correct\s+answer\s*:?|"
+    r"Answer\s*:?|Definite\s+Answer\s*:?|Final\s+answer\s*:?|"
+    r"答案\s*(?:是|为|：))",
+    re.IGNORECASE,
+)
 
-    If *extract_client* is provided, ask the extraction model to return
-    ``{"answer": "<letter>"}`` and parse it. On any failure, fall back
-    to :func:`extract_answer_regex`.
+
+def _truncate_for_extract(text: str, budget: int) -> str:
+    """Keep answer-relevant parts of an over-long response for extraction.
+
+    Preserves the head (explicit answer is usually stated there), the tail
+    (final conclusion), and windows around explicit answer markers found in
+    the middle, so the extractor still sees the answer instead of a
+    mid-reasoning cut.
     """
-    # Fast path first: the deterministic regex extractor handles
-    # well-formatted answers. Only fall back to an LLM extraction call
-    # (which can hang/rate-limit and stalls the whole worker pool) when
-    # regex cannot find an answer.
-    regex_ans = extract_answer_regex(raw_response, options, strict=strict)
-    if regex_ans is not None or extract_client is None or not raw_response.strip():
-        return regex_ans
+    if len(text) <= budget:
+        return text
 
+    head_chars = max(400, int(budget * 0.30))
+    tail_chars = max(400, int(budget * 0.15))
+    head = text[:head_chars]
+    tail = text[-tail_chars:]
+    middle = text[head_chars:len(text) - tail_chars]
+
+    snippets = [head]
+    for m in list(_EXTRACT_ANSWER_MARKER_RE.finditer(middle))[:4]:
+        s = max(0, m.start() - 120)
+        e = min(len(middle), m.end() + 320)
+        snippets.append(middle[s:e])
+    snippets.append(tail)
+
+    condensed = _EXTRACT_TRUNC_MARKER.join(snippets)
+    while len(condensed) > budget and len(snippets) > 2:
+        snippets.pop(1)
+        condensed = _EXTRACT_TRUNC_MARKER.join(snippets)
+    return condensed[:budget]
+
+
+def _build_extract_prompt(raw_response: str, options: dict) -> str:
+    """Build the extraction prompt, keeping the full input under 32768 chars.
+
+    If the model response is too long, keep the head (explicit answer is
+    usually stated there) and the tail (final conclusion), so the extractor
+    still sees the answer instead of a mid-reasoning cut.
+    """
     options_list = ", ".join(options.keys())
-    prompt = (
+    prefix = (
         "You are an answer extractor. Extract the answer option from the "
         'text below. Only return the answer as a JSON object: {"answer": "<option>"}, '
         f"where <option> is one of: {options_list}.\n"
-        "Text:\n" + raw_response
+        "Text:\n"
     )
+    budget = max(1, _MAX_EXTRACT_INPUT_CHARS - len(prefix))
+    text = _truncate_for_extract(raw_response, budget)
+    return prefix + text
+
+
+def extract_answer(
+    raw_response: str,
+    options: dict,
+    extract_client: OpenAI,
+    extract_model: str,
+    is_deepseek: bool = False,
+    retries: int = 3,
+) -> str | None:
+    """Extract the MCQ answer using the extraction model only.
+
+    Ask the extraction model to return ``{"answer": "<letter>"}`` and parse
+    it. No regex or other fallback extraction is used; returns ``None`` if
+    the extraction model cannot produce a valid answer after ``retries``
+    attempts (invalid/empty responses are retried).
+    """
+    if extract_client is None or extract_model is None:
+        raise ValueError(
+            "Extraction model is required for MCQ answers; got "
+            f"extract_client={extract_client!r}, extract_model={extract_model!r}."
+        )
+    if not raw_response.strip():
+        return None
+
+    prompt = _build_extract_prompt(raw_response, options)
     for attempt in range(retries):
         try:
             ekwargs: dict = dict(
@@ -352,11 +354,21 @@ def extract_answer(
                 ekwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": False}}
             resp = extract_client.chat.completions.create(**ekwargs)
             extraction_raw = resp.choices[0].message.content.strip()
-            data = json.loads(extraction_raw)
-            answer = str(data.get("answer", data.get("answer_idx", ""))).strip().upper()
+            if not extraction_raw:
+                answer = ""
+            else:
+                try:
+                    data = json.loads(extraction_raw)
+                except json.JSONDecodeError:
+                    data = None
+                answer = (
+                    str(data.get("answer", data.get("answer_idx", ""))).strip().upper()
+                    if isinstance(data, dict) else ""
+                )
             if answer in options:
                 return answer
         except Exception:
-            if attempt < retries - 1:
-                time.sleep(2)
-    return extract_answer_regex(raw_response, options)
+            pass
+        if attempt < retries - 1:
+            time.sleep(2)
+    return None
