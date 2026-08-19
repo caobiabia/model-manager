@@ -23,6 +23,27 @@
 
 后端还提供 `_cfg()` —— 每次请求时 `importlib.reload(model_config)`,使配置编辑**无需重启服务**即可生效。
 
+## 前端配置模型（无需手改 model_config.py）
+
+平台使用者可以直接在 Web 界面「新增模型」或点击模型行上的齿轮图标「编辑/删除」模型，
+无需手动编辑 `model_config.py`。前端配置会写入 **`models_user.json`**（与本仓库同目录），
+`model_config.py` 加载时按 key 合并进 `MODELS`：
+
+- **新增**：填入内置没有的 key，即追加一个模型；
+- **覆盖**：key 与内置模型相同，用户的版本优先（例如只改 `display_name` 或 `gpu`）；
+- **删除**：仅删除用户层配置；若对应 key 是内置模型，会回退为内置配置。
+
+合并后的 `MODELS` 就是启动 / 评测 / benchmark 的唯一数据源，
+下游脚本（`eval/common.py`、`eval/runner.py`、`eval/leaderboard.py` 等）通过
+`from model_config import MODELS` 直接可见，无需改动。
+
+后端 API：
+- `GET  /api/model-config/{key}` —— 读取单模型完整配置（编辑表单回填用）；
+- `POST /api/model-config` —— 新增或覆盖，body 为 `{key, config}`；
+- `DELETE /api/model-config/{key}` —— 删除用户层配置。
+
+> `models_user.json` 可能包含 API Key，已加入 `.gitignore`，不会进入版本管理。
+
 ## 运行环境
 
 依赖(`fastapi` / `uvicorn` / `httpx`)由上层仓库的虚拟环境提供:
@@ -78,11 +99,27 @@ python app.py
 
 `mmlu_std`（标准 MMLU，57 科 14,042 题） `gsm8k`（GSM8K test，1,319 题，自由数字作答） `ceval`（C-Eval test，52 科 12,342 题） `gpqa_diamond`（GPQA Diamond，198 题） `aime2026`（AIME 2026，30 题，整数作答）
 
+**指令遵循 Bench（`format="follow"`，由 verifier/judge 判分）**：
+
+`ifeval`（Google IFEval，~540 prompt，25 类可验证指令，strict prompt-level） `ifbench`（Allen AI IFBench，300 样本、58 种 WildChat 约束） `inverse_ifeval`（Inverse IFEval，1,012 题、中英双语、8 类逆向任务，LLM-as-a-Judge）
+
 数据由 `eval/prepare_general_benches.py` 从 HuggingFace 下载并转换为统一 JSONL 格式
 （默认走 hf-mirror.com，可用 `HF_ENDPOINT` 覆盖）。GSM8K 是自由作答 bench
 （`format="free"`），runner 用正则提取末尾数字并与标准答案精确匹配。GPQA / AIME 2026 /
 由 `eval/prepare_extra_benches.py` 下载转换（GPQA 原仓库在 HuggingFace 上需申请访问权限，
 脚本使用公开镜像的同一 Diamond 子集）。
+
+三个指令遵循 Bench 由 `eval/prepare_follow_benches.py` 下载转换（源：`google/IFEval`、
+`allenai/IFBench_test`、`m-a-p/Inverse_IFEval`）。判分方式：
+- `ifeval` / `ifbench` 复用 `eval/follow/` 内移植的官方启发式 verifier（Apache-2.0），
+  采用 **strict** prompt-level 指标（每条可验证指令都必须满足）。
+- `inverse_ifeval` 使用数据自带的 judge prompt 走 **LLM-as-a-Judge**（复用本地
+  DeepSeek 判卷模型，0/1 分）。
+
+> 新增 Python 依赖：`nltk` / `emoji` / `syllapy` / `langdetect` / `absl-py` /
+> `immutabledict`。NLTK 语料（`punkt` / `punkt_tab` / `stopwords` /
+> `averaged_perceptron_tagger_eng`）在首次运行 verifier 时自动下载到
+> `eval/follow/.nltk_data`（已 gitignore）。
 
 > SWE-bench Verified 暂缓接入：本环境没有 Docker，无法跑官方 harness 出分。`eval/benches.py`
 > 里保留了注册代码（已注释），等有 Docker 评测环境后取消注释、运行
@@ -93,7 +130,10 @@ python app.py
 
 在 `eval/benches.py` 末尾调用 `register(Bench(...))` 即可添加新 bench。只需提供 `id`、`name`、`data_file`、`language`，runner 自动处理其余逻辑。
 新增自由作答类 bench（如数学题）时设置 `format="free"`，并把标准答案写入记录的 `answer` 字段；
-新增补丁生成类 bench（如 SWE-bench）时设置 `format="patch"` 与 `scorable=False`。
+新增补丁生成类 bench（如 SWE-bench）时设置 `format="patch"` 与 `scorable=False`；
+新增指令遵循类 bench 时设置 `format="follow"` 并传入 `scorer(raw_response, question) -> bool`
+（内置 verifier：IFEval/IFBench 用 `eval.follow.verify_follow_strict`，Inverse IFEval 用
+`eval.follow.judge.judge_inverse_ifeval`）。
 
 ### 使用
 

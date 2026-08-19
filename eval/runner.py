@@ -56,6 +56,7 @@ class EvalRunner:
         workers: int = 10,
         limit: int = 0,
         no_resume: bool = False,
+        max_model_len: int | None = None,
     ):
         self.run_id = run_id
         self.model_keys = model_keys
@@ -64,6 +65,7 @@ class EvalRunner:
         self.workers = workers
         self.limit = limit
         self.no_resume = no_resume
+        self.max_model_len = max_model_len  # optional override; None = auto per model
 
         self.queue: Queue[dict | None] = Queue()
         self._stop = threading.Event()
@@ -86,6 +88,17 @@ class EvalRunner:
     @property
     def stopped(self) -> bool:
         return self._stop.is_set()
+
+    def model_max_len(self, model_key: str) -> int | None:
+        """Context length for a model: explicit override if set, else the
+        value configured in vllm_args (auto, plan A). Falls back to the
+        launch default 16384 when the model doesn't declare one."""
+        if self.max_model_len is not None:
+            return self.max_model_len
+        cfg = get_model_by_name(model_key)
+        if cfg:
+            return cfg.get("vllm_args", {}).get("max-model-len", 16384)
+        return None
 
     def _init_progress_from_disk(self) -> None:
         """Populate self.progress from existing files before starting.
@@ -345,6 +358,7 @@ class EvalRunner:
             self.results[(model_key, bench_id)] = {
                 "model_key": model_key, "bench_id": bench_id,
                 "bench_name": bench.name, "mode": self.mode,
+                "max_model_len": self.model_max_len(model_key),
                 "processed": len(results), "correct": correct,
                 "accuracy": acc, "time_elapsed": 0,
                 "results_file": results_file,
@@ -379,13 +393,14 @@ class EvalRunner:
             answer_idx = problem.get("answer_idx", "")
             is_free = getattr(bench, "format", "mcq") == "free"
             is_patch = getattr(bench, "format", "mcq") == "patch"
+            is_follow = getattr(bench, "format", "mcq") == "follow"
             gold = (
                 str(problem.get("answer", answer_idx)).strip()
                 if is_free else answer_idx
             )
             if not question:
                 return None
-            if not is_free and not is_patch and not options:
+            if not is_free and not is_patch and not is_follow and not options:
                 return None
 
             messages = bench.build_messages(problem, self.mode)
@@ -394,15 +409,28 @@ class EvalRunner:
             try:
                 raw, reasoning, usage = call_model(
                     client, model_name, messages, self.mode, is_deepseek,
-                    max_tokens=12000 if is_patch else None,
+                    max_tokens=200000 if is_patch else None,
                 )
             except Exception as e:
                 return {"realidx": realidx, "error": str(e)}
 
-            if is_free:
+            correct = None
+            correct_loose = None
+            if is_follow:
+                # No single extractable answer: correctness comes from the
+                # per-bench scorer (IFEval/IFBench verifier or Inverse IFEval
+                # LLM-judge). The raw response is kept for inspection.
+                pred = None
+                scorer = getattr(bench, "scorer", None)
+                if scorer is not None:
+                    correct = bool(scorer(raw, problem))
+                # Official IFEval reports a second, looser prompt-level metric;
+                # record it alongside strict for ifeval/ifbench benches.
+                scorer_loose = getattr(bench, "scorer_loose", None)
+                if scorer_loose is not None:
+                    correct_loose = bool(scorer_loose(raw, problem))
+            elif is_free:
                 pred = extract_free_answer(raw)
-                if pred is None:
-                    pred = extract_free_answer(reasoning, strict=True)
             elif is_patch:
                 pred = extract_patch(raw)
                 if pred is None:
@@ -411,13 +439,8 @@ class EvalRunner:
                 pred = extract_answer(
                     raw, options, ext_client, ext_model, ext_deepseek,
                 )
-                if pred is None:
-                    pred = extract_answer(
-                        reasoning, options, ext_client, ext_model, ext_deepseek,
-                    )
 
-            correct = None
-            if pred is not None and not is_patch:
+            if not is_follow and not is_patch and pred is not None:
                 correct = (pred == gold)
 
             prompt_tokens = usage.prompt_tokens if usage else 0
@@ -431,6 +454,7 @@ class EvalRunner:
                 "answer_idx": gold,
                 "predicted_answer": pred or "",
                 "correct": correct,
+                "correct_loose": correct_loose,
                 "raw_response": raw,
                 "reasoning": reasoning,
                 "token_usage": {
@@ -560,6 +584,13 @@ class EvalRunner:
             round(correct_count / processed_count * 100, 2)
             if processed_count > 0 else None
         )
+        correct_loose_count = sum(
+            1 for r in results if r.get("correct_loose") is True
+        )
+        accuracy_loose = (
+            round(correct_loose_count / processed_count * 100, 2)
+            if processed_count > 0 else None
+        )
         total_prompt = sum(
             r.get("token_usage", {}).get("prompt_tokens", 0) for r in results
         )
@@ -572,9 +603,12 @@ class EvalRunner:
             "bench_id": bench_id,
             "bench_name": bench.name,
             "mode": self.mode,
+            "max_model_len": self.model_max_len(model_key),
             "processed": processed_count,
             "correct": correct_count,
             "accuracy": accuracy,
+            "correct_loose": correct_loose_count,
+            "accuracy_loose": accuracy_loose,
             "total_prompt_tokens": total_prompt,
             "total_completion_tokens": total_completion,
             "time_elapsed": round(elapsed, 0),
@@ -610,6 +644,7 @@ class EvalRunner:
             "model_keys": self.model_keys,
             "bench_ids": self.bench_ids,
             "mode": self.mode,
+            "max_model_len": self.max_model_len,
             "workers": self.workers,
             "limit": self.limit,
             "no_resume": self.no_resume,
@@ -629,6 +664,7 @@ class EvalRunner:
         summary = {
             "run_id": self.run_id,
             "mode": self.mode,
+            "max_model_len": self.max_model_len,
             "started_at": started_at,
             "finished_at": datetime.now().isoformat(),
             "status": "aborted" if self.stopped else ("error" if self.error else "completed"),

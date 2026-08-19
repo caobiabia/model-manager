@@ -226,6 +226,20 @@ svg.lucide{flex-shrink:0;stroke-width:2}
 }
 .model-filter.active .f-count{color:var(--accent);background:var(--accent-soft);border-color:var(--accent-ring)}
 
+/* Model config bar */
+.model-config-bar{
+  display:flex;align-items:center;gap:8px;
+  padding:6px 10px;border-bottom:1px solid var(--border);
+  background:var(--panel-2);flex-shrink:0;
+}
+.add-model-btn{flex-shrink:0}
+.add-model-btn svg{width:13px;height:13px}
+.model-config-hint{
+  font-size:10px;color:var(--text-mute);margin-left:auto;cursor:help;
+  white-space:nowrap;
+}
+.model-config-hint sup{color:var(--accent);font-weight:700}
+
 /* Model list */
 .model-list{flex:1;overflow-y:auto;padding:5px 8px 8px}
 .model-empty{padding:28px 14px;text-align:center;color:var(--text-mute);font-size:12px}
@@ -644,6 +658,7 @@ svg.lucide{flex-shrink:0;stroke-width:2}
 .bench-card .tag.lang-zh{color:var(--red)}
 .bench-card .tag.fmt-free{color:var(--amber)}
 .bench-card .tag.fmt-mcq{color:var(--green)}
+.bench-card .tag.fmt-follow{color:var(--violet)}
 .bench-card .tag.missing{color:var(--red);border-color:var(--red-soft);background:var(--red-soft)}
 .bench-card.bench-hidden{display:none}
 .bench-card.unavailable{opacity:.55;cursor:not-allowed;border-style:dashed;background:var(--panel)}
@@ -767,6 +782,32 @@ svg.lucide{flex-shrink:0;stroke-width:2}
 .eval-detail-modal .result-row{display:grid;grid-template-columns:2fr 2fr 1fr 1fr 1fr;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px}
 .eval-detail-modal .result-row.head{font-weight:600;color:var(--text-dim);font-size:11px}
 
+/* ── Model config modal ── */
+.modelcfg-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 18px}
+.modelcfg-grid .field{margin-bottom:12px}
+.modelcfg-grid .field.wide{grid-column:1 / -1}
+.modelcfg-grid .field input,
+.modelcfg-grid .field select{width:100%;box-sizing:border-box}
+.modelcfg-grid .field textarea{
+  width:100%;box-sizing:border-box;padding:8px 11px;border:1px solid var(--border);
+  border-radius:var(--radius);font-size:12px;background:var(--input-bg);
+  color:var(--text);font-family:var(--font-mono);resize:vertical;min-height:54px;
+}
+.modelcfg-grid .field textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-ring)}
+.modal-box .field label .req{color:#ef4444;margin-left:2px}
+.mc-key{
+  font-size:11px;font-weight:600;color:var(--text-dim);
+  font-family:var(--font-mono);background:var(--input-bg);
+  padding:2px 7px;border-radius:20px;border:1px solid var(--border);
+}
+.mc-tag{
+  font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px;letter-spacing:.03em;
+  background:var(--accent);color:#fff;margin-left:auto;
+}
+.mc-tag.builtin{background:#6b7280;color:#fff}
+.model-edit-btn{width:26px;height:26px;padding:0;display:inline-flex;align-items:center;justify-content:center}
+.model-edit-btn svg{width:13px;height:13px}
+
 </style>
 </head>
 <body>
@@ -790,6 +831,10 @@ svg.lucide{flex-shrink:0;stroke-width:2}
       <button class="model-filter" data-filter="stopped" onclick="setModelFilter('stopped')">未启动 <span class="f-count" id="modelCountStopped"></span></button>
       <button class="model-filter" data-filter="api" onclick="setModelFilter('api')">API <span class="f-count" id="modelCountApi"></span></button>
     </div>
+  </div>
+  <div class="model-config-bar">
+    <button class="btn primary btn-xs add-model-btn" onclick="openModelConfig()" title="新增模型" aria-label="新增模型"><i data-lucide="plus"></i>新增模型</button>
+    <span class="model-config-hint" title="在前端配置模型，保存后写入 model_config（models_user.json）">前端配置<sup>?</sup></span>
   </div>
   <div class="model-list" id="modelList"></div>
   <div class="side-log" id="sideLog"></div>
@@ -863,6 +908,10 @@ svg.lucide{flex-shrink:0;stroke-width:2}
                 <label><i data-lucide="hash"></i>限制题数</label>
                 <input type="number" id="evalLimit" value="0" min="0" max="10000" title="0 = 全部题目">
               </div>
+              <div class="eval-field">
+                <label><i data-lucide="maximize-2"></i>上下文长度</label>
+                <input type="number" id="evalMaxLen" value="0" min="0" step="1000" title="0 = 自动读取模型配置的 max-model-len（推荐）。否则手动指定长度用于区分榜单">
+              </div>
             </div>
             <div class="eval-side-actions">
               <button class="btn primary" id="evalRunBtn" onclick="startEval()"><i data-lucide="play"></i>开始测评</button>
@@ -923,6 +972,12 @@ svg.lucide{flex-shrink:0;stroke-width:2}
             <input id="lbFilterInput" type="text" placeholder="筛选模型关键字…" oninput="onLbFilter(this.value)" autocomplete="off" spellcheck="false">
             <button class="ms-clear" id="lbFilterClear" onclick="clearLbFilter()" title="清空筛选" aria-label="清空筛选"><i data-lucide="x"></i></button>
           </div>
+          <div class="lb-avg-mode">
+            <span title="按上下文长度筛选，区分旧数据与新配置">长度</span>
+            <select id="lbLenFilter" onchange="onLbLenChange(this.value)" title="按上下文长度 (max-model-len) 筛选">
+              <option value="">全部</option>
+            </select>
+          </div>
           <button class="btn primary" onclick="openImportModal()"><i data-lucide="download"></i>导入历史记录</button>
           <button class="btn primary" onclick="openLbExportModal()"><i data-lucide="file-spreadsheet"></i>导出 Excel</button>
           <button class="btn ghost" onclick="loadLeaderboard()"><i data-lucide="refresh-cw"></i>刷新</button>
@@ -968,7 +1023,7 @@ svg.lucide{flex-shrink:0;stroke-width:2}
     </div>
     <div class="field">
       <label>最大长度 (max-model-len)</label>
-      <input type="number" id="launchMaxLen" value="16384" step="1000" min="1000" max="65536">
+      <input type="number" id="launchMaxLen" value="16384" step="1000" min="1000" max="262144">
     </div>
     <div class="field">
       <label>最大并发 (max-num-seqs)</label>
@@ -1015,6 +1070,75 @@ svg.lucide{flex-shrink:0;stroke-width:2}
     <div class="log-panel" id="logViewerContent" style="max-height:520px"></div>
     <div class="modal-actions">
       <button class="btn" onclick="closeLogViewer()"><i data-lucide="x"></i>关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- model config modal -->
+<div class="modal-overlay" id="modelConfigModal" style="display:none" onclick="closeModelConfig(event)">
+  <div class="modal-box" onclick="event.stopPropagation()" style="min-width:760px;max-width:920px;max-height:90vh;overflow-y:auto">
+    <h3><i data-lucide="settings-2" class="h3-icon"></i><span id="mcTitle">配置模型</span>
+      <span class="mc-key" id="mcKey"></span>
+      <span class="mc-tag" id="mcUserTag" style="display:none">用户自定义</span>
+      <span class="mc-tag builtin" id="mcBuiltinTag" style="display:none">内置</span>
+    </h3>
+    <div class="modelcfg-grid">
+      <div class="field">
+        <label>Key（唯一标识，用于启动/评测/对话）<span class="req">*</span></label>
+        <input type="text" id="mcKeyInput" placeholder="如 qwen35b_v2" oninput="onMcKeyInput()">
+        <div class="switch-hint">只能含字母、数字、下划线、点、中划线。保存后不可随意改动。</div>
+      </div>
+      <div class="field">
+        <label>类型 Provider</label>
+        <select id="mcProvider" onchange="onMcProviderChange()">
+          <option value="vllm">vLLM（本机部署）</option>
+          <option value="deepseek">远程 API（OpenAI 兼容，如 DeepSeek/airouter/Kimi）</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>展示名称 Display name<span class="req">*</span></label>
+        <input type="text" id="mcDisplayName" placeholder="如 Qwen3.6-35B (v2)">
+      </div>
+      <div class="field">
+        <label>服务模型名 served_model_name<span class="req">*</span></label>
+        <input type="text" id="mcServedName" placeholder="vLLM: 如 Qwen/Qwen3.8-27B；API: 如 deepseek-chat">
+      </div>
+      <div class="field vllm-only">
+        <label>模型权重路径 model_path</label>
+        <input type="text" id="mcModelPath" placeholder="/mntnlp/models/...">
+      </div>
+      <div class="field vllm-only">
+        <label>端口 Port</label>
+        <input type="number" id="mcPort" placeholder="26099">
+      </div>
+      <div class="field vllm-only">
+        <label>GPU 编号</label>
+        <input type="text" id="mcGpu" placeholder="0">
+      </div>
+      <div class="field api-only" style="display:none">
+        <label>Base URL</label>
+        <input type="text" id="mcBaseUrl" placeholder="https://api.deepseek.com 或 http://127.0.0.1:18080/v1">
+      </div>
+      <div class="field api-only" style="display:none">
+        <label>API Key</label>
+        <input type="password" id="mcApiKey" placeholder="sk-...">
+      </div>
+      <div class="field">
+        <label>vLLM 启动参数 vllm_args（JSON 对象，可选，仅 vLLM）</label>
+        <textarea id="mcVllmArgs" rows="3" placeholder='{"max-model-len": 262144, "gpu-memory-utilization": 0.8}' spellcheck="false"></textarea>
+        <div class="switch-hint">留空表示使用默认参数。会覆盖默认参数中的同名项。</div>
+      </div>
+      <div class="field wide">
+        <label>高级参数（JSON 对象，可选）</label>
+        <textarea id="mcExtra" rows="2" placeholder='{"base_model_path": "...", "lora_path": "..."}' spellcheck="false"></textarea>
+        <div class="switch-hint">除上述字段外的其他配置项可在此以 JSON 形式填写，如 base_model_path / lora_path 等。</div>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn danger" id="mcDeleteBtn" onclick="deleteModelConfig()" style="display:none" title="删除此模型配置"><i data-lucide="trash-2"></i>删除配置</button>
+      <span style="flex:1"></span>
+      <button class="btn" onclick="closeModelConfig()"><i data-lucide="x"></i>取消</button>
+      <button class="btn primary" onclick="saveModelConfig()"><i data-lucide="save"></i>保存</button>
     </div>
   </div>
 </div>
@@ -1281,6 +1405,11 @@ function makeModelRow(m){
   info.appendChild(name); info.appendChild(detail);
   row.appendChild(info);
   const act=document.createElement('div'); act.className='actions';
+  const cfgBtn=document.createElement('button');
+  cfgBtn.className='side-log-btn model-edit-btn'; cfgBtn.title='编辑模型配置';
+  cfgBtn.innerHTML='<i data-lucide="settings-2"></i>';
+  cfgBtn.onclick=e=>{e.stopPropagation();openModelConfig(m.key);};
+  act.appendChild(cfgBtn);
   if(m.running && m.provider!=='deepseek'){
     const logBtn=document.createElement('button');
     logBtn.className='side-log-btn'; logBtn.title='查看日志';
@@ -1414,6 +1543,124 @@ async function saveModelDescription(key){
   }catch(e){alert('保存失败: '+e)}
   refreshModels();
 }
+
+/* ── Model config: frontend writes to model_config ── */
+let mcEditingKey=null; // null = adding a new model
+
+function onMcProviderChange(){
+  const api=$('mcProvider').value==='deepseek';
+  document.querySelectorAll('.vllm-only').forEach(el=>el.style.display=api?'none':'block');
+  document.querySelectorAll('.api-only').forEach(el=>el.style.display=api?'block':'none');
+}
+function onMcKeyInput(){
+  $('mcKey').textContent=$('mcKeyInput').value.trim()||'(新)';
+}
+function openModelConfig(key){
+  mcEditingKey=key||null;
+  $('mcTitle').textContent=key?'编辑模型':'新增模型';
+  $('mcProvider').value='vllm'; onMcProviderChange();
+  ['mcKeyInput','mcDisplayName','mcServedName','mcModelPath','mcPort','mcGpu',
+   'mcBaseUrl','mcApiKey','mcVllmArgs','mcExtra'].forEach(id=>$(id).value='');
+  $('mcKey').textContent=key||'(新)';
+  $('mcUserTag').style.display='none';
+  $('mcBuiltinTag').style.display='none';
+  $('mcDeleteBtn').style.display='none';
+  $('modelConfigModal').style.display='flex';
+  if(key){
+    fetch('/api/model-config/'+encodeURIComponent(key)).then(r=>r.json()).then(d=>{
+      if(!d.config){alert('读取模型配置失败');return;}
+      fillMcForm(d);
+    }).catch(e=>alert('读取模型配置失败: '+e));
+  }
+  if(window.lucide)lucide.createIcons();
+  requestAnimationFrame(()=>{const i=$('mcKeyInput');if(i){i.focus();i.select();}});
+}
+function fillMcForm(d){
+  const c=d.config||{};
+  const prov=c.provider==='deepseek'?'deepseek':'vllm';
+  $('mcProvider').value=prov; onMcProviderChange();
+  $('mcKeyInput').value=d.key; $('mcKey').textContent=d.key;
+  $('mcDisplayName').value=c.display_name||'';
+  $('mcServedName').value=c.served_model_name||'';
+  $('mcModelPath').value=c.model_path||'';
+  $('mcPort').value=c.port!=null?c.port:'';
+  $('mcGpu').value=c.gpu!=null?c.gpu:'';
+  $('mcBaseUrl').value=c.base_url||'';
+  $('mcApiKey').value=c.api_key||'';
+  const vllm=c.vllm_args||{};
+  $('mcVllmArgs').value=Object.keys(vllm).length?JSON.stringify(vllm,null,2):'';
+  const skip=['display_name','served_model_name','provider','model_path','port','gpu',
+              'base_url','api_key','vllm_args'];
+  const extra={}; Object.keys(c).forEach(k=>{if(!skip.includes(k))extra[k]=c[k];});
+  $('mcExtra').value=Object.keys(extra).length?JSON.stringify(extra,null,2):'';
+  const user=d.is_user_defined;
+  $('mcUserTag').style.display=user?'':'none';
+  $('mcBuiltinTag').style.display=user?'none':'';
+  $('mcDeleteBtn').style.display=user?'':'none';
+  if(window.lucide)lucide.createIcons();
+}
+function closeModelConfig(e){
+  if(e&&e.target!==$('modelConfigModal'))return;
+  $('modelConfigModal').style.display='none';
+}
+function buildMcConfig(){
+  const key=$('mcKeyInput').value.trim();
+  const prov=$('mcProvider').value;
+  const config={provider:prov};
+  config.display_name=$('mcDisplayName').value.trim();
+  config.served_model_name=$('mcServedName').value.trim();
+  if(prov==='deepseek'){
+    if($('mcBaseUrl').value.trim())config.base_url=$('mcBaseUrl').value.trim();
+    if($('mcApiKey').value.trim())config.api_key=$('mcApiKey').value.trim();
+  }else{
+    if($('mcModelPath').value.trim())config.model_path=$('mcModelPath').value.trim();
+    const port=parseInt($('mcPort').value,10);
+    if(!isNaN(port))config.port=port;
+    if($('mcGpu').value.trim())config.gpu=$('mcGpu').value.trim();
+    const vllmRaw=$('mcVllmArgs').value.trim();
+    if(vllmRaw){
+      try{config.vllm_args=JSON.parse(vllmRaw);}
+      catch(e){throw new Error('vllm_args 不是合法 JSON: '+e.message);}
+    }
+  }
+  const extraRaw=$('mcExtra').value.trim();
+  if(extraRaw){
+    let extra;
+    try{extra=JSON.parse(extraRaw);}
+    catch(e){throw new Error('高级参数不是合法 JSON: '+e.message);}
+    Object.assign(config,extra);
+  }
+  return {key,config};
+}
+async function saveModelConfig(){
+  let payload;
+  try{payload=buildMcConfig();}
+  catch(e){alert(e.message);return;}
+  if(!payload.key){alert('请输入模型 Key');return;}
+  if(!payload.config.display_name){alert('请输入展示名称 display_name');return;}
+  if(!payload.config.served_model_name){alert('请输入服务模型名 served_model_name');return;}
+  try{
+    const r=await fetch('/api/model-config',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(payload),
+    });
+    const d=await r.json();
+    if(!r.ok)alert('保存失败: '+(d.detail||JSON.stringify(d)));
+    else{closeModelConfig();refreshModels();}
+  }catch(e){alert('保存失败: '+e)}
+}
+async function deleteModelConfig(){
+  const key=$('mcKeyInput').value.trim();
+  if(!key){alert('缺少模型 Key');return;}
+  if(!confirm('确认删除模型配置 "'+key+'"？\n该操作会从 model_config 中移除此用户配置。'))return;
+  try{
+    const r=await fetch('/api/model-config/'+encodeURIComponent(key),{method:'DELETE'});
+    const d=await r.json();
+    if(!r.ok)alert('删除失败: '+(d.detail||JSON.stringify(d)));
+    else{closeModelConfig();refreshModels();}
+  }catch(e){alert('删除失败: '+e)}
+}
+
 function updateChatSelect(models){
   let sel=$('chatModel'),cur=sel.value;
   let opts='<option value="">-- 选择模型 --</option>';
@@ -1474,6 +1721,7 @@ async function openLaunch(key,name){
     let models=await(await fetch('/api/models')).json();
     let m=models.find(x=>x.key===key);
     currentLaunchModel=m;
+    if(m&&m.max_model_len){$('launchMaxLen').value=m.max_model_len;}
     if(m&&m.lora_path){
       $('loraRankField').style.display='block';
       $('loraInfoField').style.display='block';
@@ -1747,13 +1995,14 @@ function renderBenchGrid(){
         card.dataset.desc=((b.description||'')+' '+g.name).toLowerCase();
         card.title=b.description||b.id;
         const langCls=b.language==='zh'?'lang-zh':'';
-        const fmt=b.format==='free'?'free':'mcq';
+        const fmt=(b.format==='free')?'free':(b.format==='follow')?'follow':'mcq';
+        const fmtLabel=(b.format==='free')?'FREE':(b.format==='follow')?'FOLLOW':'MCQ';
         const icon=unavailable?'x-circle':'circle';
         card.innerHTML='<i data-lucide="'+icon+'" class="bc-check"></i>'+
           '<span class="bc-name">'+escapeHtml(b.name)+'</span>'+
           '<span class="bc-tags">'+
             '<span class="tag '+langCls+'">'+(b.language==='zh'?'ZH':'EN')+'</span>'+
-            '<span class="tag fmt-'+fmt+'">'+(b.format==='free'?'FREE':'MCQ')+'</span>'+
+            '<span class="tag fmt-'+fmt+'">'+fmtLabel+'</span>'+
             (unavailable?'<span class="tag missing">缺数据</span>':'')+
           '</span>';
         if(!unavailable)card.onclick=()=>toggleBenchCard(card);
@@ -1920,6 +2169,7 @@ function createEvalRun(rid,status,cfg){
     run_id:rid,
     status:status||'running',
     mode:(cfg&&cfg.mode)||'',
+    maxModelLen:(cfg&&cfg.max_model_len)||null,
     modelKeys:(cfg&&cfg.model_keys)||[],
     benchIds:(cfg&&cfg.bench_ids)||[],
     progressData:{},
@@ -1984,7 +2234,9 @@ function updateRunSummary(runId){
   const donePairs=entries.filter(p=>p.status==='done'||(p.total>0&&p.done>=p.total)).length;
   const totalPairs=(run.modelKeys.length*run.benchIds.length)||entries.length;
   const sum=el.querySelector('.run-summary');
-  if(sum)sum.textContent=total?done+'/'+total:(totalPairs?donePairs+'/'+totalPairs:'');
+  let txt=total?done+'/'+total:(totalPairs?donePairs+'/'+totalPairs:'');
+  if(run.maxModelLen)txt=(txt?txt+' · ':'')+(run.maxModelLen>=1024?(run.maxModelLen/1024)+'k':'');
+  if(sum)sum.textContent=txt;
 }
 function renderRunningEvalList(){
   const list=$('runningEvalList');
@@ -2016,6 +2268,7 @@ async function showEvalRun(runId){
     try{
       const rd=await(await fetch('/api/eval/run/'+runId)).json();
       run.mode=rd.config?.mode||run.mode;
+      run.maxModelLen=rd.config?.max_model_len||null;
       run.modelKeys=rd.config?.model_keys||[];
       run.benchIds=rd.config?.bench_ids||[];
       run.status=rd.status||run.status;
@@ -2045,6 +2298,7 @@ function renderEvalProgress(runId){
   header+='<span class="status-pill '+evalStatusClass(run.status)+'">'+evalStatusLabel(run.status)+'</span>';
   header+='<span style="font-family:var(--font-mono);font-size:11px;font-weight:600">'+escapeHtml(runId)+'</span>';
   if(run.mode)header+='<span style="font-size:11px;color:var(--text-dim)">'+escapeHtml(run.mode)+'</span>';
+  if(run.maxModelLen)header+='<span style="font-size:11px;color:var(--text-dim)" title="max-model-len">长度 '+(run.maxModelLen>=1024?(run.maxModelLen/1024)+'k':run.maxModelLen)+'</span>';
   if(run.modelKeys.length||run.benchIds.length)header+='<span style="font-size:11px;color:var(--text-dim)">'+run.modelKeys.length+' 模型 · '+run.benchIds.length+' Bench</span>';
   if(run.error)header+='<span style="color:var(--red);font-size:11px">'+escapeHtml(run.error)+'</span>';
   if(run.status==='interrupted'||run.status==='stopped'){
@@ -2214,7 +2468,7 @@ async function startEval(){
     const r=await fetch('/api/eval/run',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({model_keys:models,bench_ids:benches,mode:evalMode,
         workers:parseInt($('evalWorkers').value)||10,limit:parseInt($('evalLimit').value)||0,
-        no_resume:false})});
+        no_resume:false,max_model_len:parseInt($('evalMaxLen').value)||null})});
     const d=await r.json();
     if(!r.ok){
       let msg=d.detail||JSON.stringify(d);
@@ -2344,13 +2598,39 @@ function downloadDetail(runId,filename){
 /* ── Leaderboard ── */
 let lbData=null;
 let lbModelFilter='';
+let lbLenFilter='';
 let lbAvgMode='simple';
 
 async function loadLeaderboard(){
   try{
     lbData=await(await fetch('/api/eval/leaderboard')).json();
+    populateLenFilter();
     renderLeaderboard();
   }catch(e){console.error('loadLeaderboard',e)}
+}
+
+function lbLenValue(e){
+  const v=e.max_model_len;
+  return (Number.isFinite(v)&&v>0)?v:16384; // old/no-config entries bucket to the launch default
+}
+
+function populateLenFilter(){
+  const sel=$('lbLenFilter');
+  if(!sel||!lbData)return;
+  const lens=new Set();
+  Object.values(lbData.entries||{}).forEach(list=>{
+    (list||[]).forEach(e=>lens.add(lbLenValue(e)));
+  });
+  const cur=sel.value;
+  const sorted=Array.from(lens).sort((a,b)=>a-b);
+  sel.innerHTML='<option value="">全部 ('+sorted.length+' 种长度)</option>'+
+    sorted.map(v=>'<option value="'+v+'">'+(v>=1024?v/1024+'k':'')+' ('+v+')</option>').join('');
+  if(cur&&lens.has(Number(cur)))sel.value=cur;
+}
+
+function onLbLenChange(v){
+  lbLenFilter=v?Number(v):'';
+  renderLeaderboard();
 }
 
 function renderLeaderboard(){
@@ -2363,6 +2643,9 @@ function renderLeaderboard(){
   let shownModels=0;
   for(const[ck,label]of Object.entries(cats)){
     let items=entries[ck]||[];
+    if(lbLenFilter!==''){
+      items=items.filter(e=>lbLenValue(e)===lbLenFilter);
+    }
     if(kw)items=items.filter(e=>
       (e.model_name&&String(e.model_name).toLowerCase().includes(kw))||
       (e.model_key&&String(e.model_key).toLowerCase().includes(kw))
@@ -2419,7 +2702,7 @@ function renderLeaderboard(){
           html+='<td>-</td>';
         }
       });
-      html+='<td><button class="btn btn-xs danger" onclick="deleteLbEntries(\''+ck+'\',\''+mk+'\')"><i data-lucide="trash-2"></i></button></td>';
+      html+='<td><button class="btn btn-xs danger" onclick="deleteLbEntries(\''+ck+'\',\''+mk+'\',\''+lbLenFilter+'\')"><i data-lucide="trash-2"></i></button></td>';
       html+='</tr>';
     });
     html+='</tbody></table></div></div>';
@@ -2498,12 +2781,13 @@ async function importRun(runId){
   }catch(e){alert('Failed: '+e)}
 }
 
-async function deleteLbEntries(category,modelKey){
-  if(!confirm('删除 '+modelKey+' 在此分榜的所有记录?'))return;
+async function deleteLbEntries(category,modelKey,len){
+  const lv=len?Number(len):null;
+  if(!confirm('删除 '+modelKey+(lv!==null?'（长度 '+lv+'）':'')+' 在此分榜的记录?'))return;
   try{
     const data=lbData.entries[category]||[];
     for(const e of data){
-      if(e.model_key===modelKey){
+      if(e.model_key===modelKey&&(lv===null||lbLenValue(e)===lv)){
         await fetch('/api/eval/leaderboard/'+e.id,{method:'DELETE'});
       }
     }
@@ -2583,7 +2867,7 @@ async function exportLbExcel(btn){
     const res=await fetch('/api/eval/leaderboard/export',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({avg_mode:avgMode,groups})
+      body:JSON.stringify({avg_mode:avgMode,groups,max_model_len:lbLenFilter!==''?Number(lbLenFilter):null})
     });
     if(!res.ok){
       let msg='导出失败 ('+res.status+')';

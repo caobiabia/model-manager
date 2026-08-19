@@ -106,9 +106,12 @@ def import_run(
             "bench_name": bench_name,
             "category": category,
             "mode": mode,
+            "max_model_len": r.get("max_model_len"),
             "accuracy": r.get("accuracy", 0),
             "correct": r.get("correct", 0),
             "processed": r.get("processed", 0),
+            "accuracy_loose": r.get("accuracy_loose"),
+            "correct_loose": r.get("correct_loose", 0),
             "run_id": run_id,
             "imported_at": datetime.now().isoformat(),
         }
@@ -120,6 +123,7 @@ def import_run(
                 e.get("model_key") == model_key
                 and e.get("bench_id") == bench_id
                 and e.get("mode") == mode
+                and e.get("max_model_len") == entry.get("max_model_len")
             ):
                 entries[i] = entry
                 found = True
@@ -139,29 +143,27 @@ def import_run(
 
 
 def get_leaderboard() -> dict[str, Any]:
-    """Return leaderboard entries grouped by category."""
+    """Return leaderboard entries grouped by category.
+
+    Categories shown to users are: hard, full, general, general_subset.
+    The removed historical categories (s10 "Sampled 10%" and medqa_cn
+    "subset") are deliberately excluded from the response so the UI no longer
+    renders them; their stored entries remain in leaderboard.json. `total`
+    still reflects the full stored count.
+    """
     entries = _load()
-    categories: dict[str, list[dict]] = {
-        "hard": [],
-        "full": [],
-        "general": [],
-        "general_subset": [],
-        "s10": [],
-        "subset": [],
-    }
+    SHOWN = ("hard", "full", "general", "general_subset")
+    categories: dict[str, list[dict]] = {c: [] for c in SHOWN}
     for e in entries:
         cat = e.get("category", "hard")
-        if cat not in categories:
-            categories[cat] = []
-        categories[cat].append(e)
+        if cat in categories:
+            categories[cat].append(e)
     return {
         "categories": {
             "hard": "Hard (test_hard)",
             "full": "Test (test)",
             "general": "\u901a\u7528 Bench (MMLU/GSM8K/C-Eval/GPQA/AIME)",
             "general_subset": "\u901a\u7528\u5b50\u96c6 (MMLU/GSM8K/C-Eval)",
-            "s10": "Sampled 10%",
-            "subset": "MedQA \u4e2d\u6587\u5b50\u96c6",
         },
         "entries": categories,
         "total": len(entries),
@@ -183,7 +185,16 @@ def clear_all() -> int:
     return count
 
 
-def export_to_xlsx(groups: list[dict[str, Any]], avg_mode: str = "simple") -> bytes:
+def _entry_len(e: dict) -> int | None:
+    v = e.get("max_model_len")
+    return v if isinstance(v, int) and v > 0 else 16384
+
+
+def export_to_xlsx(
+        groups: list[dict[str, Any]],
+        avg_mode: str = "simple",
+        max_model_len: int | None = None,
+) -> bytes:
     """Build an xlsx workbook for selected leaderboard groups.
 
     Each group dict supports:
@@ -228,6 +239,8 @@ def export_to_xlsx(groups: list[dict[str, Any]], avg_mode: str = "simple") -> by
         wanted_benches = group.get("benches") or None
         wanted_models = group.get("models") or None
         items = [e for e in entries if e.get("category") == cat]
+        if max_model_len is not None:
+            items = [e for e in items if _entry_len(e) == max_model_len]
         if wanted_benches:
             wanted = set(wanted_benches)
             items = [e for e in items if e.get("bench_id") in wanted]
@@ -287,6 +300,10 @@ def export_to_xlsx(groups: list[dict[str, Any]], avg_mode: str = "simple") -> by
             bench_best[bid] = max(vals) if vals else None
 
         base_title = sanitize_sheet(labels.get(cat, cat))
+        if max_model_len is not None:
+            base_title = sanitize_sheet(
+                f"{labels.get(cat, cat)}-{(max_model_len / 1024):.0f}k"
+            )
         title = base_title
         n = 2
         while title in used_titles:

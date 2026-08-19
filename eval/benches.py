@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from eval.common import BENCHMARK_DATA_DIR, SUBSET_DATA_FILE, load_jsonl
+from eval.common import BENCHMARK_DATA_DIR, load_jsonl
 
 
 # -- prompt constants ------------------------------------------------------
@@ -119,6 +119,19 @@ _AIME_COT_USER = (
     "Problem:\n{question}\n"
 )
 
+# Instruction following (IFEval / IFBench / Inverse IFEval) -- just hand the
+# raw instruction/prompt to the model; correctness is judged by a verifier.
+_FOLLOW_ZS_SYSTEM = (
+    "You are a helpful assistant. Follow the user's instructions carefully "
+    "and respond exactly as asked."
+)
+_FOLLOW_ZS_USER = "{question}"
+_FOLLOW_COT_SYSTEM = (
+    "You are a helpful assistant. Follow the user's instructions carefully. "
+    "Think step by step if useful, then produce your final response."
+)
+_FOLLOW_COT_USER = "{question}"
+
 # SWE-bench -- free-form unified diff patch generation
 _SWE_ZS_SYSTEM = (
     "You are an expert software engineer. Given a GitHub issue, produce "
@@ -154,14 +167,22 @@ class Bench:
         language:  ``"en"`` or ``"zh"`` -- picks the prompt family
         split:     data split label (informational, e.g. ``"test_hard"``)
         description: short human-readable description
-        format:    ``"mcq"`` (letter choice, default) or ``"free"``
-                   (free-form numeric answer, e.g. GSM8K)
+        format:    ``"mcq"`` (letter choice, default), ``"free"``
+                   (free-form numeric answer, e.g. GSM8K), or ``"follow"``
+                   (instruction following -- scored by a verifier/judge).
         prompt_style: English prompt family: ``"med"`` (medical MCQ),
                       ``"general"`` (general MCQ), ``"gsm8k"`` / ``"aime"``
-                      (free-form math), or ``"swebench"`` (patch generation)
+                      (free-form math), ``"swebench"`` (patch generation), or
+                      ``"follow"`` (instruction-following benches).
         scorable: whether the runner can compute an inline accuracy.
                   False for benches whose correctness requires an external
                   harness (e.g. SWE-bench patch test execution).
+        scorer:   optional callable ``scorer(raw_response, question) -> bool``
+                  used to compute per-question correctness for
+                  ``format=="follow"`` benches (built-in verifiers/judges).
+        scorer_loose: optional second scorer (e.g. the official IFEval "loose"
+                  upper-bound metric) recorded alongside ``scorer`` so both
+                  official accuracies are surfaced.
     """
 
     id: str
@@ -173,6 +194,8 @@ class Bench:
     format: str = "mcq"
     prompt_style: str = "med"
     scorable: bool = True
+    scorer: callable | None = None
+    scorer_loose: callable | None = None
 
     def load_questions(self) -> list[dict]:
         """Load and return all questions from the data file."""
@@ -233,6 +256,17 @@ class Bench:
                         repo=repo, base_commit=base_commit, question=q_text
                     ),
                 },
+            ]
+
+        if self.format == "follow":
+            if mode == "zero_shot":
+                return [
+                    {"role": "system", "content": _FOLLOW_ZS_SYSTEM},
+                    {"role": "user", "content": _FOLLOW_ZS_USER.format(question=q_text)},
+                ]
+            return [
+                {"role": "system", "content": _FOLLOW_COT_SYSTEM},
+                {"role": "user", "content": _FOLLOW_COT_USER.format(question=q_text)},
             ]
 
         if self.language == "zh":
@@ -363,72 +397,6 @@ for _ds in [
             description=_BENCH_DESC[_ds] + " (full test split)",
         ))
 
-
-
-# -- sampled-10 subsets (data_sampled10/) --------------------------------
-# 10 MedicalAgentsBench datasets x 2 languages (EN + ZH) x 2 splits
-# (test_hard + test). Each dataset has ~100 questions per hard split.
-# These live in csp_dev/eval/data_sampled10/<Dataset>/.
-
-_SAMPLED_DIR = Path(__file__).resolve().parent / "data_sampled10"
-
-# Folder names in data_sampled10 use Title-Case (e.g. "MedQA"), but the
-# bench ids use the lowercase canonical names from _BENCH_NAMES.
-_SAMPLED_FOLDER = {
-    "medqa": "MedQA",
-    "pubmedqa": "PubMedQA",
-    "medmcqa": "MedMCQA",
-    "mmlu": "MMLU",
-    "mmlu-pro": "MMLU-Pro",
-    "medbullets": "MedBullets",
-    "afrimedqa": "AfrimedQA",
-    "medexqa": "MedExQA",
-    "medxpertqa-r": "MedXpertQA-R",
-    "medxpertqa-u": "MedXpertQA-U",
-}
-
-_SAMPLED_SPLITS = [
-    ("hard", "test_hard-00000-of-00001"),
-    ("easy", "test-00000-of-00001"),
-]
-
-for _ds in _SAMPLED_FOLDER:
-    _folder = _SAMPLED_FOLDER[_ds]
-    _ds_dir = _SAMPLED_DIR / _folder
-    if not _ds_dir.exists():
-        continue
-    for _split_short, _split_prefix in _SAMPLED_SPLITS:
-        for _lang_code, _lang_label in [("en", ""), ("zh", "_zh")]:
-            _suffix = "" if _lang_code == "en" else "-zh_pure_standard"
-            _fname = f"{_split_prefix}{_suffix}.jsonl"
-            _fpath = _ds_dir / _fname
-            if not _fpath.exists():
-                continue
-            _bid = f"{_ds}_{_lang_code}_{_split_short}"
-            _bname = _BENCH_NAMES[_ds]
-            if _lang_code == "zh":
-                _bname += " (中文)"  # (中文)
-            _bname += f" [s10-{_split_short}]"
-            register(Bench(
-                id=_bid,
-                name=_bname,
-                data_file=_fpath,
-                language="zh" if _lang_code == "zh" else "en",
-                split=f"sampled10_{_split_short}",
-                description=_BENCH_DESC.get(_ds, "") + " (sampled 10%)",
-            ))
-
-# -- custom: MedQA Chinese subset (350 questions) --------------------------
-
-register(Bench(
-    id="medqa_cn",
-    name="MedQA \u4e2d\u6587\u5b50\u96c6",  # MedQA 中文子集
-    data_file=SUBSET_DATA_FILE,
-    language="zh",
-    split="subset",
-    description="\u81ea\u5b9a\u4e49 MedQA \u4e2d\u6587 350 \u9898\u5b50\u96c6",
-    # "自定义 MedQA 中文 350 题子集"
-))
 
 
 # -- standard general benches: MMLU / GSM8K / C-Eval ----------------------
@@ -568,3 +536,76 @@ if _aime_test.exists():
 #         description="500 human-validated GitHub issues; runner saves "
 #                     "generated patches, official harness scoring required",
 #     ))
+
+# -- instruction-following benches: IFEval / IFBench / Inverse IFEval -----
+# Prepared by eval/prepare_follow_benches.py into eval/data_general/.
+# These are format="follow" benches: there is no single extractable answer,
+# so per-question correctness comes from a scorer callback --
+#   * IFEval / IFBench: the (vendored) official heuristic verifiers, strict
+#     prompt-level metric (every verifiable instruction must be satisfied)
+#   * Inverse IFEval: the dataset's "LLM-as-a-Judge" protocol (0/1 score)
+
+def _lazy_follow_scorer():
+    """Strict IFEval-style verifier; converts (raw, problem) -> bool."""
+    from eval.follow import verify_follow_strict
+    return lambda raw, problem: verify_follow_strict(problem, raw)
+
+
+def _lazy_follow_scorer_loose():
+    """Official IFEval 'loose' (upper-bound) verifier; (raw, problem) -> bool."""
+    from eval.follow import verify_follow_loose
+    return lambda raw, problem: verify_follow_loose(problem, raw)
+
+
+def _lazy_inverse_judge():
+    """Inverse IFEval LLM-as-a-Judge scorer."""
+    from eval.follow.judge import judge_inverse_ifeval
+    return judge_inverse_ifeval
+
+
+_ifeval_test = _GENERAL_DATA_DIR / "IFEval" / "test.jsonl"
+if _ifeval_test.exists():
+    register(Bench(
+        id="ifeval",
+        name="IFEval",
+        data_file=_ifeval_test,
+        language="en",
+        split="general",
+        format="follow",
+        prompt_style="follow",
+        scorer=_lazy_follow_scorer(),
+        scorer_loose=_lazy_follow_scorer_loose(),
+        description="Google IFEval (~500 prompts, 25 verifiable instruction "
+                    "types; official strict + loose prompt-level following)",
+    ))
+
+_ifbench_test = _GENERAL_DATA_DIR / "IFBench" / "test.jsonl"
+if _ifbench_test.exists():
+    register(Bench(
+        id="ifbench",
+        name="IFBench",
+        data_file=_ifbench_test,
+        language="en",
+        split="general",
+        format="follow",
+        prompt_style="follow",
+        scorer=_lazy_follow_scorer(),
+        scorer_loose=_lazy_follow_scorer_loose(),
+        description="Allen AI IFBench (300 test samples, 58 constraint types "
+                    "from WildChat; official strict + loose verifiable following)",
+    ))
+
+_inverse_test = _GENERAL_DATA_DIR / "InverseIFEval" / "test.jsonl"
+if _inverse_test.exists():
+    register(Bench(
+        id="inverse_ifeval",
+        name="Inverse IFEval",
+        data_file=_inverse_test,
+        language="en",
+        split="general",
+        format="follow",
+        prompt_style="follow",
+        scorer=_lazy_inverse_judge(),
+        description="Inverse IFEval (1,012 questions, 8 reverse/counter-"
+                    "intuitive instruction types; LLM-as-a-Judge scoring)",
+    ))

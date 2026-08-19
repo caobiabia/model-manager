@@ -15,6 +15,9 @@ env/
 # Secrets / env
 .env
 
+# User-editable model config (added via Web UI, may contain API keys)
+models_user.json
+
 # OS
 .DS_Store
 Thumbs.db
@@ -29,3 +32,6 @@ node_modules/
 # Eval output (results, checkpoints)
 eval/output/
 eval/leaderboard.json
+
+# Repo-local NLTK corpora downloaded by the IFEval/IFBench verifiers
+eval/follow/.nltk_data/

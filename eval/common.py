@@ -126,12 +126,10 @@ def call_model(
         else:
             kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": False}}
     else:  # cot
-        # Thinking models (e.g. Qwen3.6) often burn >6k tokens on hard
-        # reasoning (AIME/GPQA). With max_tokens=6000 the response is
-        # truncated mid-reasoning: content stays empty and scoring falls
-        # back to garbage from the partial thinking trace. Keep 11000
-        # (vLLM servers here are launched with max-model-len=12000).
-        kwargs["max_tokens"] = max_tokens or 11000
+        # Eval cap is 200k tokens for reasoning-heavy COT (avoid truncation);
+        # vLLM servers are launched with max-model-len=262144 (256k).
+
+        kwargs["max_tokens"] = max_tokens or 200000
         if is_deepseek:
             kwargs["reasoning_effort"] = "high"
             kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
@@ -174,14 +172,14 @@ def _normalize_number(s: str) -> str:
     return sign + s
 
 
-def extract_free_answer(text: str, strict: bool = False) -> str | None:
-    """Extract the final numeric answer (GSM8K-style) from a model response.
+def extract_free_answer(text: str) -> str | None:
+    """Extract the final numeric answer from a model response.
 
-    Checks, in order: the canonical ``#### <number>`` marker, explicit
-    answer labels (English/Chinese), a ``\\boxed{<number>}`` pattern (AIME
-    style), then the last number in the text. In *strict* mode only
-    explicit answer markers are accepted (no last-number fallback), so a
-    truncated reasoning trace cannot produce a bogus answer.
+    Only explicit answer formats are accepted: the canonical ``#### <number>``
+    marker, a ``\\boxed{<number>}`` pattern (AIME style), or explicit answer
+    labels (English/Chinese). There is no loose "last number in text" fallback:
+    if the model did not answer in an expected format, ``None`` is returned and
+    the question is treated as wrong.
     """
     if not text:
         return None
@@ -208,10 +206,6 @@ def extract_free_answer(text: str, strict: bool = False) -> str | None:
             if num:
                 return _normalize_number(num.group(0))
 
-    if not strict:
-        nums = re.findall(r"[+-]?\d[\d,]*(?:\.\d+)?", clean)
-        if nums:
-            return _normalize_number(nums[-1])
     return None
 
 

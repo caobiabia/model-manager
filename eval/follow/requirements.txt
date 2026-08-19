@@ -1,0 +1,10 @@
+# Python deps for the vendored IFEval / IFBench verifiers and the Inverse
+# IFEval LLM-judge (besides the repo-level fastapi/uvicorn/httpx/openai/pandas).
+# Install into the shared venv:
+#   /mntnlp/csp/workspace/.venv/bin/pip install -r eval/follow/requirements.txt
+nltk>=3.8
+emoji>=2.0
+syllapy>=0.8
+langdetect>=1.0
+absl-py>=1.0
+immutabledict>=4.0

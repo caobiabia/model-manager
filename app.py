@@ -9,6 +9,7 @@ import concurrent.futures
 import json
 import importlib
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -69,6 +70,29 @@ def _save_description(key: str, description: str) -> None:
             encoding="utf-8",
         )
         os.replace(tmp, DESCRIPTION_FILE)
+
+
+USER_MODELS_FILE = getattr(model_config, "_USER_MODELS_FILE", APP_DIR / "models_user.json")
+
+
+def _load_user_models() -> dict[str, dict]:
+    """Load the user-editable model layer (models_user.json)."""
+    cfg = _cfg()
+    if hasattr(cfg, "load_user_models"):
+        return cfg.load_user_models()
+    return {}
+
+
+def _save_user_models(data: dict[str, dict]) -> None:
+    """Persist the whole user model layer atomically, then hot-reload."""
+    USER_MODELS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = USER_MODELS_FILE.with_suffix(".json.tmp")
+    tmp.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    os.replace(tmp, USER_MODELS_FILE)
+    _cfg()  # reload so MODELS reflects the change immediately
 
 
 app = FastAPI(title="CSP Model Manager")
@@ -279,6 +303,11 @@ class DescriptionUpdate(BaseModel):
     description: str = ""
 
 
+class ModelConfigWrite(BaseModel):
+    key: str
+    config: dict[str, Any]
+
+
 class ChatMessage(BaseModel):
     role: str
     content: str
@@ -450,6 +479,7 @@ async def list_models() -> list[dict[str, Any]]:
             "provider": cfg.get("provider", "vllm"),
             "port": cfg.get("port"),
             "gpu": cfg.get("gpu"),
+            "max_model_len": cfg.get("vllm_args", {}).get("max-model-len", 16384),
             "running": alive,
             "description": descriptions.get(key, ""),
         }
@@ -479,6 +509,58 @@ async def update_model_description(model_key: str, body: DescriptionUpdate) -> d
     description = body.description.strip()
     _save_description(model_key, description)
     return {"ok": True, "key": model_key, "description": description}
+
+
+# ——— user model config (write through to model_config.MODELS) ———
+
+_VALID_KEYS = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*$")
+
+
+@app.get("/api/model-config/{model_key}")
+async def get_model_config(model_key: str) -> dict[str, Any]:
+    cfg = _cfg().MODELS.get(model_key)
+    if cfg is None:
+        raise HTTPException(404, f"Unknown model: {model_key}")
+    user = _load_user_models()
+    return {
+        "key": model_key,
+        "config": cfg,
+        "is_user_defined": model_key in user,
+    }
+
+
+@app.post("/api/model-config")
+async def write_model_config(body: ModelConfigWrite) -> dict[str, Any]:
+    key = body.key.strip()
+    if not key:
+        raise HTTPException(400, "模型 key 不能为空")
+    if not _VALID_KEYS.match(key):
+        raise HTTPException(400, "模型 key 只能包含字母、数字、下划线、点和中划线，且不能以数字/符号开头")
+    config = body.config or {}
+    if not isinstance(config, dict):
+        raise HTTPException(400, "config 必须是对象")
+    if not config.get("display_name"):
+        raise HTTPException(400, "缺少 display_name（展示名称）")
+    if not config.get("served_model_name"):
+        raise HTTPException(400, "缺少 served_model_name")
+
+    with _desc_lock:  # serialize config writes
+        user = _load_user_models()
+        user[key] = config
+        _save_user_models(user)
+    return {"ok": True, "key": key, "is_user_defined": True}
+
+
+@app.delete("/api/model-config/{model_key}")
+async def delete_model_config(model_key: str) -> dict[str, Any]:
+    with _desc_lock:
+        user = _load_user_models()
+        if model_key not in user:
+            raise HTTPException(404, f"未找到用户级模型配置: {model_key}")
+        del user[model_key]
+        _save_user_models(user)
+    restored = model_key in _cfg().MODELS
+    return {"ok": True, "key": model_key, "restored_to_builtin": restored}
 
 
 # ——— launch ————
@@ -946,6 +1028,7 @@ class EvalRunRequest(BaseModel):
     workers: int = 10
     limit: int = 0
     no_resume: bool = False
+    max_model_len: int | None = None  # None = auto from each model's config
 
 
 @app.get("/api/eval/benches")
@@ -999,6 +1082,7 @@ async def eval_start_run(req: EvalRunRequest) -> dict[str, Any]:
         workers=req.workers,
         limit=req.limit,
         no_resume=req.no_resume,
+        max_model_len=req.max_model_len,
     )
     _eval_runs[run_id] = {"runner": runner, "status": "running"}
 
@@ -1181,6 +1265,7 @@ async def eval_resume_run(run_id: str):
         workers=config.get("workers", 10),
         limit=config.get("limit", 0),
         no_resume=False,
+        max_model_len=config.get("max_model_len"),
     )
     # Initialize progress from disk BEFORE putting in _eval_runs,
     # so the GET /progress endpoint returns correct data immediately
@@ -1340,6 +1425,7 @@ class LbExportGroup(BaseModel):
 class LbExportRequest(BaseModel):
     groups: list[LbExportGroup]
     avg_mode: str = "simple"
+    max_model_len: int | None = None
 
 
 @app.post("/api/eval/leaderboard/export")
@@ -1351,7 +1437,9 @@ async def eval_lb_export(req: LbExportRequest) -> Response:
         {"category": g.category, "benches": g.benches, "models": g.models}
         for g in req.groups
     ]
-    data = _eval_lb.export_to_xlsx(groups, avg_mode=req.avg_mode)
+    data = _eval_lb.export_to_xlsx(
+        groups, avg_mode=req.avg_mode, max_model_len=req.max_model_len
+    )
     if not data:
         raise HTTPException(
             400,
