@@ -69,7 +69,6 @@ class EvalRunner:
 
         self.queue: Queue[dict | None] = Queue()
         self._stop = threading.Event()
-        self._write_lock = Lock()
 
         self.output_dir = EVAL_OUTPUT_DIR / run_id
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -384,6 +383,26 @@ class EvalRunner:
         consecutive_errors = 0
         aborted = False
 
+        # Per-(model, bench) persistence. Each bench writes only its own
+        # results list/file, and only from this thread, so no shared global
+        # lock is needed (the old self._write_lock serialized every bench's
+        # disk write). Batched writes avoid doing an O(n^2) full rewrite+sorted
+        # json.dump on every single question.
+        write_lock = Lock()
+        flush_every = 50
+        pending = 0
+        correct_count = initial_correct
+
+        def flush_results() -> None:
+            nonlocal pending
+            if not results:
+                return
+            with write_lock:
+                results.sort(key=lambda x: x.get("realidx", 0))
+                with open(results_file, "w", encoding="utf-8") as f:
+                    json.dump(results, f, indent=2, ensure_ascii=False)
+            pending = 0
+
         def process_one(idx: int, problem: dict) -> dict | None:
             if self._stop.is_set():
                 return None
@@ -521,11 +540,12 @@ class EvalRunner:
                     result = {"realidx": realidx, "error": str(e)}
 
                 if result is not None:
-                    with self._write_lock:
-                        results.append(result)
-                        results.sort(key=lambda x: x.get("realidx", 0))
-                        with open(results_file, "w", encoding="utf-8") as f:
-                            json.dump(results, f, indent=2, ensure_ascii=False)
+                    results.append(result)
+                    if result.get("correct") is True:
+                        correct_count += 1
+                    pending += 1
+                    if pending >= flush_every:
+                        flush_results()
 
                 save_progress(progress_file, realidx)
                 completed += 1
@@ -545,9 +565,6 @@ class EvalRunner:
                 else:
                     consecutive_errors = 0
 
-                correct_count = sum(
-                    1 for r in results if r.get("correct") is True
-                )
                 processed_count = len(results)
                 acc = (
                     round(correct_count / processed_count * 100, 1)
@@ -577,8 +594,10 @@ class EvalRunner:
         # Shutdown: if stopped, don't wait for in-flight API calls
         executor.shutdown(wait=not self.stopped, cancel_futures=self.stopped)
 
+        # Persist any buffered results so the on-disk file is complete.
+        flush_results()
+
         elapsed = time.time() - start_time
-        correct_count = sum(1 for r in results if r.get("correct") is True)
         processed_count = len(results)
         accuracy = (
             round(correct_count / processed_count * 100, 2)
