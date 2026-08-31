@@ -1089,11 +1089,20 @@ async def eval_start_run(req: EvalRunRequest) -> dict[str, Any]:
     def _run():
         try:
             runner.run()
-            # runner.run() returns normally even after a stop signal; keep
-            # the "stopped" status set by the stop endpoint instead of
-            # unconditionally marking the aborted run as completed.
+            # runner.run() returns normally even after a stop signal. Derive
+            # the true end state from the runner itself: an internal auto-abort
+            # (e.g. too many consecutive errors) sets stopped/error without the
+            # stop endpoint ever touching _eval_runs, which previously let an
+            # aborted run be mis-labeled "completed" in memory and then surface
+            # that way in the UI. Only a genuinely finished run becomes
+            # "completed".
             if _eval_runs[run_id]["status"] == "running":
-                _eval_runs[run_id]["status"] = "completed"
+                if runner.stopped:
+                    _eval_runs[run_id]["status"] = "stopped"
+                elif runner.error:
+                    _eval_runs[run_id]["status"] = f"error: {runner.error}"
+                else:
+                    _eval_runs[run_id]["status"] = "completed"
         except Exception as e:
             _eval_runs[run_id]["status"] = f"error: {e}"
 
@@ -1279,11 +1288,20 @@ async def eval_resume_run(run_id: str):
     def _run():
         try:
             runner.run()
-            # runner.run() returns normally even after a stop signal; keep
-            # the "stopped" status set by the stop endpoint instead of
-            # unconditionally marking the aborted run as completed.
+            # runner.run() returns normally even after a stop signal. Derive
+            # the true end state from the runner itself: an internal auto-abort
+            # (e.g. too many consecutive errors) sets stopped/error without the
+            # stop endpoint ever touching _eval_runs, which previously let an
+            # aborted run be mis-labeled "completed" in memory and then surface
+            # that way in the UI. Only a genuinely finished run becomes
+            # "completed".
             if _eval_runs[run_id]["status"] == "running":
-                _eval_runs[run_id]["status"] = "completed"
+                if runner.stopped:
+                    _eval_runs[run_id]["status"] = "stopped"
+                elif runner.error:
+                    _eval_runs[run_id]["status"] = f"error: {runner.error}"
+                else:
+                    _eval_runs[run_id]["status"] = "completed"
         except Exception as e:
             _eval_runs[run_id]["status"] = f"error: {e}"
 

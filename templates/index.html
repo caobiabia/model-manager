@@ -733,6 +733,11 @@ svg.lucide{flex-shrink:0;stroke-width:2}
   outline:none;cursor:pointer;transition:border-color var(--t-fast);
 }
 .lb-avg-mode select:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-ring)}
+.lb-len-tabs{display:inline-flex;align-items:center;gap:0;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;padding:2px}
+.lb-len-tabs>span{font-size:12px;color:var(--text-dim);padding:0 6px 0 3px;white-space:nowrap}
+.lb-len-tabs .lb-len-btn{border:none;background:transparent;color:var(--text-dim);font-size:12px;font-family:var(--font);padding:3px 10px;cursor:pointer;border-radius:var(--radius-sm);transition:background var(--t-fast),color var(--t-fast)}
+.lb-len-tabs .lb-len-btn:hover{background:var(--panel-hover);color:var(--text)}
+.lb-len-tabs .lb-len-btn.active{background:var(--accent);color:#fff;font-weight:600}
 .lb-search{position:relative;display:flex;align-items:center;flex:1;min-width:220px;max-width:360px;margin-left:auto}
 .lb-search>svg{position:absolute;left:9px;width:14px;height:14px;color:var(--text-mute);pointer-events:none;z-index:1}
 .lb-search input{
@@ -972,11 +977,10 @@ svg.lucide{flex-shrink:0;stroke-width:2}
             <input id="lbFilterInput" type="text" placeholder="筛选模型关键字…" oninput="onLbFilter(this.value)" autocomplete="off" spellcheck="false">
             <button class="ms-clear" id="lbFilterClear" onclick="clearLbFilter()" title="清空筛选" aria-label="清空筛选"><i data-lucide="x"></i></button>
           </div>
-          <div class="lb-avg-mode">
-            <span title="按上下文长度筛选，区分旧数据与新配置">长度</span>
-            <select id="lbLenFilter" onchange="onLbLenChange(this.value)" title="按上下文长度 (max-model-len) 筛选">
-              <option value="">全部</option>
-            </select>
+          <div class="lb-len-tabs" title="按上下文长度 (max-model-len) 切换榜单">
+            <span>长度</span>
+            <button class="lb-len-btn active" data-len="262144" onclick="setLbLen(262144)">256k</button>
+            <button class="lb-len-btn" data-len="16384" onclick="setLbLen(16384)">16k</button>
           </div>
           <button class="btn primary" onclick="openImportModal()"><i data-lucide="download"></i>导入历史记录</button>
           <button class="btn primary" onclick="openLbExportModal()"><i data-lucide="file-spreadsheet"></i>导出 Excel</button>
@@ -2155,6 +2159,7 @@ function evalStatusLabel(st){
   if(st==='running')return '运行中';
   if(st==='stopped')return '已停止';
   if(st==='interrupted')return '已中断';
+  if(st==='aborted')return '已中止';
   if(st==='completed')return '已完成';
   if(st==='error')return '出错';
   return st||'未知';
@@ -2203,7 +2208,7 @@ async function restoreRunningEvals(){
   try{
     await ensureEvalMeta();
     const runs=await(await fetch('/api/eval/runs')).json();
-    const targets=runs.filter(r=>r.status==='running'||r.status==='stopped'||r.status==='interrupted');
+    const targets=runs.filter(r=>r.status==='running'||r.status==='stopped'||r.status==='interrupted'||r.status==='aborted');
     for(const t of targets){
       if(evalRuns[t.run_id])continue;
       let cfg={};
@@ -2252,7 +2257,7 @@ function renderRunningEvalList(){
   if(split)split.classList.remove('no-runs');
   list.innerHTML=runs.map(r=>{
     const active=r.run_id===activeEvalRunId;
-    const dotClass=r.status==='completed'?'completed':(r.status==='stopped'||r.status==='interrupted'?'stopped':'running');
+    const dotClass=r.status==='completed'?'completed':(r.status==='stopped'||r.status==='interrupted'||r.status==='aborted'?'stopped':'running');
     return '<div class="eval-run-card'+(active?' active':'')+'" id="run-row-'+r.run_id+'" onclick="showEvalRun(\''+r.run_id+'\')" title="'+escapeHtml(r.run_id)+'">'+
       '<span class="status-dot '+dotClass+'"></span>'+
       '<span class="run-id">'+escapeHtml(r.run_id.slice(-6))+'</span>'+
@@ -2301,7 +2306,7 @@ function renderEvalProgress(runId){
   if(run.maxModelLen)header+='<span style="font-size:11px;color:var(--text-dim)" title="max-model-len">长度 '+(run.maxModelLen>=1024?(run.maxModelLen/1024)+'k':run.maxModelLen)+'</span>';
   if(run.modelKeys.length||run.benchIds.length)header+='<span style="font-size:11px;color:var(--text-dim)">'+run.modelKeys.length+' 模型 · '+run.benchIds.length+' Bench</span>';
   if(run.error)header+='<span style="color:var(--red);font-size:11px">'+escapeHtml(run.error)+'</span>';
-  if(run.status==='interrupted'||run.status==='stopped'){
+  if(run.status==='interrupted'||run.status==='stopped'||run.status==='aborted'||run.status==='completed'){
     header+='<button class="btn btn-xs primary" onclick="resumeRun(\''+runId+'\')"><i data-lucide="play"></i>继续运行</button>';
   }
   header+='</div>';
@@ -2352,7 +2357,9 @@ function handleEvalEvent(runId,ev){
       model:ev.model_key,model_key:ev.model_key,bench_id:ev.bench_id,
       bench_name:ev.bench_name,total:ev.total,
       done:Math.max(ev.done||0,run.progressData[key].done||0),
-      correct:0,accuracy:0,status:'running'
+      correct:run.progressData[key].correct||0,
+      accuracy:run.progressData[key].accuracy!=null?run.progressData[key].accuracy:0,
+      status:'running'
     });
   }else if(ev.type==='progress'){
     const key=ev.model_key+'|'+ev.bench_id;
@@ -2368,7 +2375,7 @@ function handleEvalEvent(runId,ev){
         done:Math.max(ev.processed||0,run.progressData[key].done||0),
         correct:ev.correct,accuracy:ev.accuracy,
         bench_name:ev.bench_name||run.progressData[key].bench_name,
-        status:ev.aborted?'aborted':'done'
+        status:ev.aborted?'aborted':(ev.stopped&&run.progressData[key].total>0&&ev.processed<run.progressData[key].total?'interrupted':'done')
       });
     }
   }else if(ev.type==='skip'){
@@ -2529,8 +2536,8 @@ async function loadEvalRuns(){
         const results=summ.results||[];
         const status=r.status||'unknown';
         const statusClass=status.includes('error')?'error':status==='completed'?'completed':status==='running'?'running':'interrupted';
-        const canResume=status==='interrupted'||status==='stopped';
-        const canShowProgress=status==='running'||status==='stopped'||status==='interrupted';
+        const canResume=status==='interrupted'||status==='stopped'||status==='aborted'||status==='completed';
+        const canShowProgress=status==='running'||status==='stopped'||status==='interrupted'||status==='aborted'||status==='completed';
         const modelDesc=(cfg.model_keys||[]).map(k=>evalModelNames[k]||k).join('、');
         const benchDesc=(cfg.bench_ids||[]).map(id=>benchNameOf(id)||id).join('、');
         return '<tr onclick="showRunDetail(\''+r.run_id+'\')">'+
@@ -2598,13 +2605,12 @@ function downloadDetail(runId,filename){
 /* ── Leaderboard ── */
 let lbData=null;
 let lbModelFilter='';
-let lbLenFilter='';
+let lbLenFilter=262144; // default: 256k leaderboard
 let lbAvgMode='simple';
 
 async function loadLeaderboard(){
   try{
     lbData=await(await fetch('/api/eval/leaderboard')).json();
-    populateLenFilter();
     renderLeaderboard();
   }catch(e){console.error('loadLeaderboard',e)}
 }
@@ -2614,22 +2620,11 @@ function lbLenValue(e){
   return (Number.isFinite(v)&&v>0)?v:16384; // old/no-config entries bucket to the launch default
 }
 
-function populateLenFilter(){
-  const sel=$('lbLenFilter');
-  if(!sel||!lbData)return;
-  const lens=new Set();
-  Object.values(lbData.entries||{}).forEach(list=>{
-    (list||[]).forEach(e=>lens.add(lbLenValue(e)));
+function setLbLen(v){
+  lbLenFilter=v;
+  document.querySelectorAll('.lb-len-btn').forEach(b=>{
+    b.classList.toggle('active', Number(b.dataset.len)===v);
   });
-  const cur=sel.value;
-  const sorted=Array.from(lens).sort((a,b)=>a-b);
-  sel.innerHTML='<option value="">全部 ('+sorted.length+' 种长度)</option>'+
-    sorted.map(v=>'<option value="'+v+'">'+(v>=1024?v/1024+'k':'')+' ('+v+')</option>').join('');
-  if(cur&&lens.has(Number(cur)))sel.value=cur;
-}
-
-function onLbLenChange(v){
-  lbLenFilter=v?Number(v):'';
   renderLeaderboard();
 }
 

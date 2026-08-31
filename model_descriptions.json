@@ -3,8 +3,5 @@
   "qwen35b_full_sft_medical_mix_v3_epoch1": "1:1 一轮",
   "qwen35b_full_sft_medical_mix_v3_epoch2": "1:1 二轮",
   "qwen35b": "基座",
-  "qwen35b_lora128_qa_reasoning_full_epoch3": "3:3:1 全量数据集三轮",
-  "qwen35b_lora128_qa_reasoning_full_epoch2": "3:3:1 全量数据集二轮",
-  "qwen35b_lora128_qa_reasoning_full_epoch1": "3:3:1 全量数据集一轮",
   "qwen35_9b_base": "基座"
 }

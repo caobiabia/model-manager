@@ -33,7 +33,6 @@ from eval.common import (
     extract_free_answer,
     extract_patch,
     get_extract_model,
-    load_processed_ids,
     save_progress,
 )
 from eval.benches import get_bench
@@ -42,7 +41,6 @@ from model_config import get_model_by_name
 # Abort a (model, bench) pair after this many consecutive failures
 # (indicates the model is unreachable / misconfigured).
 MAX_CONSECUTIVE_ERRORS = 5
-
 
 class EvalRunner:
     """Run one evaluation pass across models x benches."""
@@ -91,12 +89,32 @@ class EvalRunner:
     def model_max_len(self, model_key: str) -> int | None:
         """Context length for a model: explicit override if set, else the
         value configured in vllm_args (auto, plan A). Falls back to the
-        launch default 16384 when the model doesn't declare one."""
+        launch default 16384 when the model doesn't declare one.
+
+        API-variant configs (provider="deepseek" with base_url) don't carry a
+        local vllm_args, so we inherit the context length from the local vLLM
+        config that serves the same model (same served_model_name). Otherwise a
+        262144 model would be recorded as the 16384 default."""
         if self.max_model_len is not None:
             return self.max_model_len
         cfg = get_model_by_name(model_key)
         if cfg:
-            return cfg.get("vllm_args", {}).get("max-model-len", 16384)
+            ml = cfg.get("vllm_args", {}).get("max-model-len")
+            if ml:
+                return ml
+            # No max-model-len on this config: inherit from a sibling config
+            # serving the same model that declares one.
+            from model_config import MODELS
+            served = cfg.get("served_model_name")
+            if served:
+                for other in MODELS.values():
+                    if other is cfg:
+                        continue
+                    if other.get("served_model_name") == served:
+                        ml = other.get("vllm_args", {}).get("max-model-len")
+                        if ml:
+                            return ml
+            return 16384
         return None
 
     def _init_progress_from_disk(self) -> None:
@@ -228,10 +246,36 @@ class EvalRunner:
             "bench_ids": self.bench_ids,
         })
 
-        # Run all benches concurrently, distributing workers evenly.
-        # Each bench gets at least 1 worker; total = workers_per_bench * n_benches.
+        # Run all benches concurrently, sharing a single per-model worker
+        # budget. To avoid a lone trailing bench stalling at a tiny fixed
+        # concurrency, the budget is *redistributed* whenever a bench
+        # finishes: every still-running bench grows its concurrency, so the
+        # last remaining bench (often the largest) eventually gets most of
+        # the worker budget instead of being stuck at workers//n_benches.
         n_benches = len(self.bench_ids)
-        workers_per_bench = max(1, self.workers // n_benches) if n_benches else 1
+        alive = set(self.bench_ids)
+        share = max(1, self.workers)
+        quota = {
+            bid: max(1, share // n_benches)
+            for bid in alive
+        }
+        cap_lock = Lock()
+
+        def get_quota(bid: str) -> int:
+            with cap_lock:
+                return quota.get(bid, 1)
+
+        def reallocate(done_bid: str) -> None:
+            with cap_lock:
+                alive.discard(done_bid)
+                quota.pop(done_bid, None)
+                n = len(alive)
+                if n == 0:
+                    return
+                base = share // n
+                extra = share % n
+                for i, bid in enumerate(sorted(alive)):
+                    quota[bid] = max(1, base + (1 if i < extra else 0))
 
         threads = []
         for bench_id in self.bench_ids:
@@ -241,7 +285,7 @@ class EvalRunner:
                 target=self._run_bench,
                 args=(model_key, bench_id, client, model_name,
                       is_deepseek, ext_client, ext_model, ext_deepseek,
-                      workers_per_bench),
+                      get_quota, reallocate),
             )
             threads.append(t)
             t.start()
@@ -260,12 +304,14 @@ class EvalRunner:
         ext_client,
         ext_model: str | None,
         ext_deepseek: bool,
-        workers: int,
+        get_quota,
+        reallocate,
     ) -> None:
         bench = get_bench(bench_id)
         if bench is None:
             self.queue.put({"type": "skip", "model_key": model_key,
                             "bench_id": bench_id, "reason": "Unknown bench"})
+            reallocate(bench_id)
             return
 
         if not Path(bench.data_file).exists():
@@ -273,6 +319,7 @@ class EvalRunner:
                 "type": "skip", "model_key": model_key, "bench_id": bench_id,
                 "reason": f"Data file not found: {bench.data_file}",
             })
+            reallocate(bench_id)
             return
 
         questions = bench.load_questions()
@@ -290,16 +337,6 @@ class EvalRunner:
             for f in [results_file, progress_file]:
                 if os.path.exists(f):
                     os.remove(f)
-
-        processed_ids = load_processed_ids(progress_file)
-        to_process: list[tuple[int, dict]] = []
-        for i, q in enumerate(questions):
-            realidx = q.get("realidx", i)
-            if realidx in processed_ids:
-                continue
-            if self.limit > 0 and len(to_process) >= self.limit:
-                break
-            to_process.append((i, q))
 
         results = []
         if os.path.exists(results_file):
@@ -320,10 +357,21 @@ class EvalRunner:
                 results = []
 
         # The results file is authoritative for what has actually been
-        # persisted. Progress entries without a saved result (e.g. a write
-        # failed when the disk filled up) must NOT be skipped on resume.
-        if results:
-            processed_ids = {r.get("realidx") for r in results}
+        # persisted. A realidx that is checkpointed in the progress file but
+        # has no saved result (e.g. an in-flight future discarded when the
+        # run was stopped, or a result lost in an unflushed batch when the
+        # process died) must be RETRIED, not skipped -- otherwise the run
+        # can never reach total/total.
+        processed_ids = {str(r.get("realidx")) for r in results}
+
+        to_process: list[tuple[int, dict]] = []
+        for i, q in enumerate(questions):
+            realidx = q.get("realidx", i)
+            if str(realidx) in processed_ids:
+                continue
+            if self.limit > 0 and len(to_process) >= self.limit:
+                break
+            to_process.append((i, q))
 
         initial_done = min(len(processed_ids), total) if total > 0 else len(processed_ids)
         initial_correct = sum(1 for r in results if r.get("correct") is True)
@@ -376,6 +424,7 @@ class EvalRunner:
                 "accuracy": acc, "time": 0,
                 "aborted": False,
             })
+            reallocate(bench_id)
             return
 
         completed = len(processed_ids)
@@ -399,8 +448,15 @@ class EvalRunner:
                 return
             with write_lock:
                 results.sort(key=lambda x: x.get("realidx", 0))
-                with open(results_file, "w", encoding="utf-8") as f:
+                # Atomic write: a crash mid-rewrite must not leave a
+                # truncated results file (which would make resume lose the
+                # whole bench).
+                tmp_file = results_file + ".tmp"
+                with open(tmp_file, "w", encoding="utf-8") as f:
                     json.dump(results, f, indent=2, ensure_ascii=False)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp_file, results_file)
             pending = 0
 
         def process_one(idx: int, problem: dict) -> dict | None:
@@ -491,24 +547,33 @@ class EvalRunner:
                 result.pop("predicted_answer", None)
             return result
 
-        # -- rolling submission: only workers+1 futures alive at a time --
+        # -- rolling submission driven by a dynamic concurrency quota --
         # This makes stop responsive: new futures aren't submitted after
         # the stop flag is set, and process_one checks it at entry.
         # We manage the executor manually (not via ``with``) so that on
         # stop we can shutdown(wait=False) instead of blocking on
         # in-flight API calls that may take 30-60s each.
-        executor = ThreadPoolExecutor(max_workers=workers)
+        # The executor's max_workers is sized to the *worst-case* quota
+        # (threads are created lazily); the live concurrency is bounded by
+        # get_quota(), which grows as sibling benches finish. So a trailing
+        # bench picks up the freed workers instead of staying at a small
+        # fixed number.
+        executor = ThreadPoolExecutor(max_workers=max(1, self.workers))
         future_map: dict = {}
         next_idx = 0
 
-        # Pre-fill the pool
-        for _ in range(min(workers, len(to_process))):
-            if self.stopped:
-                break
-            idx, q = to_process[next_idx]
-            future_map[executor.submit(process_one, idx, q)] = (
-                idx, q.get("realidx", idx))
-            next_idx += 1
+        def _submit_more(quota: int) -> None:
+            """Submit up to ``quota`` in-flight futures."""
+            nonlocal next_idx
+            while (not self.stopped and next_idx < len(to_process)
+                   and len(future_map) < quota):
+                idx, q = to_process[next_idx]
+                future_map[executor.submit(process_one, idx, q)] = (
+                    idx, q.get("realidx", idx))
+                next_idx += 1
+
+        # Pre-fill the pool with the current quota
+        _submit_more(get_quota(bench_id))
 
         while future_map:
             # Wait for at least one future to complete (poll every 2s)
@@ -527,12 +592,9 @@ class EvalRunner:
             for future in done_set:
                 i, realidx = future_map.pop(future)
 
-                # Submit next question if not stopped
-                if not self.stopped and next_idx < len(to_process):
-                    idx, q = to_process[next_idx]
-                    future_map[executor.submit(process_one, idx, q)] = (
-                        idx, q.get("realidx", idx))
-                    next_idx += 1
+                # Refill up to the (possibly grown) quota
+                if not self.stopped:
+                    _submit_more(get_quota(bench_id))
 
                 try:
                     result = future.result()
@@ -546,8 +608,10 @@ class EvalRunner:
                     pending += 1
                     if pending >= flush_every:
                         flush_results()
-
-                save_progress(progress_file, realidx)
+                    # Checkpoint only what was actually persisted. A None
+                    # result (question discarded at stop time) must stay
+                    # retryable on resume.
+                    save_progress(progress_file, realidx)
                 completed += 1
 
                 # Track consecutive errors
@@ -635,10 +699,12 @@ class EvalRunner:
             "aborted": aborted,
         }
         self.results[(model_key, bench_id)] = summary
+        early_stopped = bool(self.stopped and processed_count < total)
         with self._progress_lock:
             self.progress[pk].update({
                 "done": processed_count, "correct": correct_count,
-                "accuracy": accuracy, "status": "done",
+                "accuracy": accuracy,
+                "status": "interrupted" if early_stopped else "done",
             })
 
         self.queue.put({
@@ -647,8 +713,12 @@ class EvalRunner:
             "bench_name": bench.name,
             "processed": processed_count, "correct": correct_count,
             "accuracy": accuracy, "time": round(elapsed, 0),
-            "aborted": aborted,
+            "aborted": aborted, "stopped": self.stopped,
         })
+
+        # This bench is done; hand its worker budget back so a still-running
+        # sibling bench can grow its concurrency (dynamic tail reallocation).
+        reallocate(bench_id)
 
     def get_progress(self):
         # Return current progress snapshot for all (model, bench) pairs.

@@ -48,12 +48,17 @@ def load_jsonl(file_path: str | Path) -> list[dict]:
     return data
 
 
-def load_processed_ids(progress_file: str) -> set[int]:
-    """Load already-processed question indices for resume support."""
+def load_processed_ids(progress_file: str) -> set[str]:
+    """Load already-processed question realidx for resume support.
+
+    Returns the raw line strings. Data-file realidx may be str (hash-based
+    benches) or int (index-based benches); return the original text so
+    callers can match against ``str(realidx)`` regardless of type.
+    """
     if not os.path.exists(progress_file):
         return set()
     with open(progress_file, "r") as f:
-        return set(int(line.strip()) for line in f if line.strip().isdigit())
+        return set(line.strip() for line in f if line.strip())
 
 
 _progress_lock = Lock()
@@ -91,13 +96,13 @@ def create_client(cfg: dict) -> tuple[OpenAI, str, bool]:
 def get_extract_model() -> tuple[OpenAI, str, bool]:
     """Return ``(client, model_name, is_deepseek)`` for answer extraction.
 
-    Uses the locally-launched DeepSeek-V4-Flash vLLM instance in
-    non-reasoning mode (temporary switch from the remote DeepSeek API).
+    Uses the remote DeepSeek-V4-Flash vLLM instance (114.55.210.21:26006)
+    in non-reasoning mode.
     The extraction model is mandatory: MCQ answers must be extracted by an
     LLM extractor, so a missing local instance raises an error instead of
     silently falling back to regex.
     """
-    base_url = "http://localhost:26006/v1"
+    base_url = "http://114.55.210.21:26006/v1"
     model_name = "DeepSeek-V4-Flash"
     return OpenAI(api_key="not-needed", base_url=base_url), model_name, True
 
