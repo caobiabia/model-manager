@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>CSP Model Manager</title>
+<title>Model Console</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -625,7 +625,9 @@ svg.lucide{flex-shrink:0;stroke-width:2}
 .bench-group.has-selected .g-count{background:var(--g-c);color:#fff}
 .bench-group[data-key="med_hard"]{--g-c:var(--accent);--g-soft:var(--accent-soft)}
 .bench-group[data-key="med_full"]{--g-c:var(--accent-strong);--g-soft:var(--accent-soft)}
-.bench-group[data-key="general"]{--g-c:var(--green);--g-soft:var(--green-soft)}
+.bench-group[data-key="general_follow"]{--g-c:var(--violet);--g-soft:var(--violet-soft)}
+.bench-group[data-key="general_knowledge"]{--g-c:var(--green);--g-soft:var(--green-soft)}
+.bench-group[data-key="general_reasoning"]{--g-c:var(--pink);--g-soft:var(--pink-soft)}
 .bench-group[data-key="general_subset"]{--g-c:var(--amber);--g-soft:var(--amber-soft)}
 .bench-group[data-key="s10"]{--g-c:var(--violet);--g-soft:var(--violet-soft)}
 .bench-group[data-key="subset"]{--g-c:var(--pink);--g-soft:var(--pink-soft)}
@@ -820,7 +822,7 @@ svg.lucide{flex-shrink:0;stroke-width:2}
 <!-- sidebar -->
 <aside class="sidebar">
   <div class="sidebar-header">
-    <span class="logo-dot"></span><span class="brand">CSP Model Manager</span>
+    <span class="logo-dot"></span><span class="brand">Model Console</span>
     <button class="btn btn-xs ghost" onclick="scanModels()" style="margin-left:auto" title="刷新扫描模型列表" aria-label="刷新扫描模型列表"><i data-lucide="refresh-cw"></i><span>刷新</span></button>
   </div>
   <div class="gpu-bar" id="gpuBar">loading...</div>
@@ -875,8 +877,13 @@ svg.lucide{flex-shrink:0;stroke-width:2}
     <label class="param"><i data-lucide="layers"></i><span>Max tokens</span><input type="number" id="maxTokens" value="2048" step="256" min="128" max="16384"></label>
     <label class="param think-switch">
       <i data-lucide="brain"></i>
-      <input type="checkbox" id="enableThinking" checked onchange="this.nextElementSibling.textContent=this.checked?'思考开':'思考关'">
+      <input type="checkbox" id="enableThinking" checked onchange="this.nextElementSibling.textContent=this.checked?'思考开':'思考关';syncEffortEnabled()">
       <span class="switch-label">思考开</span>
+    </label>
+    <label class="param" id="effortParam" style="display:none">
+      <i data-lucide="gauge"></i><span>思考强度</span>
+      <select id="reasoningEffort" onchange="onEffortChange()"></select>
+      <input type="number" id="reasoningEffortNum" style="display:none;width:64px" step="1" title="自定义强度数值" onchange="onEffortChange()">
     </label>
   </div></div>
   <div class="chat-input-area"><div class="chat-input-inner">
@@ -916,6 +923,17 @@ svg.lucide{flex-shrink:0;stroke-width:2}
               <div class="eval-field">
                 <label><i data-lucide="maximize-2"></i>上下文长度</label>
                 <input type="number" id="evalMaxLen" value="0" min="0" step="1000" title="0 = 自动读取模型配置的 max-model-len（推荐）。否则手动指定长度用于区分榜单">
+              </div>
+              <div class="eval-field">
+                <label><i data-lucide="thermometer"></i>采样温度</label>
+                <input type="number" id="evalTemp" value="0" min="0" max="2" step="0.05" title="0 = 贪心解码（默认，评测可复现）。>0 启用温度采样，如 0.6 / 0.7">
+              </div>
+              <div class="eval-field" id="evalEffortField" style="display:none">
+                <label><i data-lucide="gauge"></i>思考强度</label>
+                <div style="display:flex;gap:4px">
+                  <select id="evalEffort" onchange="onEvalEffortChange()" style="flex:1;min-width:0"></select>
+                  <input type="number" id="evalEffortNum" style="display:none;width:64px" step="1" title="自定义强度数值">
+                </div>
               </div>
             </div>
             <div class="eval-side-actions">
@@ -1027,7 +1045,7 @@ svg.lucide{flex-shrink:0;stroke-width:2}
     </div>
     <div class="field">
       <label>最大长度 (max-model-len)</label>
-      <input type="number" id="launchMaxLen" value="16384" step="1000" min="1000" max="262144">
+      <input type="number" id="launchMaxLen" value="262144" step="1000" min="1000" max="262144">
     </div>
     <div class="field">
       <label>最大并发 (max-num-seqs)</label>
@@ -1665,11 +1683,57 @@ async function deleteModelConfig(){
   }catch(e){alert('删除失败: '+e)}
 }
 
+/* ── 思考强度控件: 由 /api/models 里每个模型声明的 thinking spec 动态渲染 ──
+   spec = {transport, efforts:{label:下发值}, numeric:{min,max}?, default?}
+   无 spec = 该模型不支持强度调节, 整块隐藏; 档位值域各模型自定, 不做归一化。 */
+let chatModelsCache=[];
+function currentEffortSpec(){
+  const m=chatModelsCache.find(x=>x.key===$('chatModel').value);
+  const s=m&&m.thinking;
+  return (s&&typeof s==='object')?s:null;
+}
+function renderEffortControl(){
+  const spec=currentEffortSpec(),wrap=$('effortParam'),sel=$('reasoningEffort'),num=$('reasoningEffortNum');
+  const efforts=(spec&&spec.efforts)||{};
+  const labels=Object.keys(efforts);
+  if(!labels.length){wrap.style.display='none';return}
+  const prevSel=sel.value,prevNum=num.value;
+  wrap.style.display='';
+  let html='<option value="">默认(不传参)</option>';
+  labels.forEach(l=>{const v=efforts[l];
+    html+=`<option value="${escapeHtml(l)}">${escapeHtml(String(v)===l?l:l+' ('+v+')')}</option>`});
+  if(spec.numeric)html+='<option value="__custom">自定义</option>';
+  sel.innerHTML=html;
+  sel.value=(prevSel===''||Array.from(sel.options).some(o=>o.value===prevSel))?prevSel:'';
+  if(!sel.value&&spec.default!=null){
+    const hit=labels.find(l=>l===String(spec.default)||String(efforts[l])===String(spec.default));
+    sel.value=hit||'';
+  }
+  if(spec.numeric){num.min=spec.numeric.min;num.max=spec.numeric.max;num.value=prevNum||spec.default||spec.numeric.min}
+  onEffortChange();syncEffortEnabled();
+}
+function onEffortChange(){
+  $('reasoningEffortNum').style.display=$('reasoningEffort').value==='__custom'?'':'none';
+}
+function syncEffortEnabled(){
+  const on=$('enableThinking').checked;
+  $('reasoningEffort').disabled=!on;$('reasoningEffortNum').disabled=!on;
+}
+function getEffortValue(){
+  if($('effortParam').style.display==='none'||!$('enableThinking').checked)return undefined;
+  const v=$('reasoningEffort').value;
+  if(!v)return undefined;
+  if(v==='__custom'){const n=parseInt($('reasoningEffortNum').value,10);return isNaN(n)?undefined:n}
+  return v;
+}
+
 function updateChatSelect(models){
+  chatModelsCache=models;
   let sel=$('chatModel'),cur=sel.value;
   let opts='<option value="">-- 选择模型 --</option>';
   models.forEach(m=>opts+=`<option value="${escapeHtml(m.key)}" ${m.key===cur?'selected':''}>${escapeHtml(m.display_name)}</option>`);
   sel.innerHTML=opts;
+  renderEffortControl();
 }
 function selectModel(key,running){
   activeModel=key;
@@ -1677,7 +1741,7 @@ function selectModel(key,running){
   badge.textContent=running?'已就绪':'未启动';
   badge.className=running?'status-badge ready':'status-badge off';
   refreshModels();
-  setTimeout(()=>{$('chatModel').value=key},50);
+  setTimeout(()=>{$('chatModel').value=key;renderEffortControl()},50);
   // selecting a (different) model from the sidebar starts a fresh conversation
   if(!streaming)newChat();
 }
@@ -1814,10 +1878,25 @@ async function sendMessage(){
     if(c && c!=='思考中...')msgs.push({role,content:c});
   });
   if(!msgs.length){bubble.textContent='无消息历史';streaming=false;$('sendBtn').disabled=false;$('sendBtn').querySelector('.btn-label').textContent='发送';return}
-  let reader,fullContent='',fullReason='';
+  let reader,rawAll='',reasonApi='';
+  /* 思考内容两种来源：后端已分离的 delta.reasoning(_content)，或 vLLM
+     未开 reasoning-parser 时混在 content 里的思考文本 —— 以 </think> 结束，
+     起始 <think> 在生成提示里、常缺失，故两种形态都要处理。 */
+  function renderBubble(final){
+    let reason=reasonApi, body=rawAll, wrapped=false;
+    let m=body.match(/^<think>([\s\S]*?)(<\/think>|$)/);
+    if(m){if(!reasonApi)reason+=m[1];body=body.slice(m[0].length);wrapped=true}
+    else{const i=body.indexOf('</think>');if(i>=0){if(!reasonApi)reason+=body.slice(0,i);body=body.slice(i+8);wrapped=true}}
+    if(!wrapped&&!final&&$('enableThinking').checked){reason+=body;body=''}
+    reason=reason.replace(/^\s+/,'');
+    let display=renderContent(body.trim());
+    if(reason)display='<details open><summary>思考过程</summary><div class="reasoning">'+escapeHtml(reason)+'</div></details>'+display;
+    bubble.innerHTML=display;container.scrollTop=container.scrollHeight;
+    return body.trim();
+  }
   try{
     let r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({model_key:key,messages:msgs,temperature:parseFloat($('temperature').value),max_tokens:parseInt($('maxTokens').value),stream:true,enable_thinking:$('enableThinking').checked})});
+      body:JSON.stringify({model_key:key,messages:msgs,temperature:parseFloat($('temperature').value),max_tokens:parseInt($('maxTokens').value),stream:true,enable_thinking:$('enableThinking').checked,reasoning_effort:getEffortValue()})});
     if(!r.ok){bubble.textContent='Error '+r.status+': '+(await r.text()).slice(0,200);return}
     reader=r.body.getReader();let decoder=new TextDecoder();
     while(true){
@@ -1827,16 +1906,16 @@ async function sendMessage(){
         line=line.trim();if(!line.startsWith('data: '))continue;
         let d=line.slice(6);if(d==='[DONE]')break;
         try{let j=JSON.parse(d.trim()),delta=j.choices?.[0]?.delta;if(delta){
-  if(delta.content){fullContent+=delta.content}
-  if(delta.reasoning){fullReason+=delta.reasoning}
-  let display=renderContent(fullContent);
-  if(fullReason)display='<details open><summary>思考过程</summary><div class="reasoning">'+escapeHtml(fullReason)+'</div></details>'+display;
-  bubble.innerHTML=display;container.scrollTop=container.scrollHeight;
+  if(delta.content)rawAll+=delta.content;
+  let r2=delta.reasoning||delta.reasoning_content;
+  if(r2)reasonApi+=r2;
+  renderBubble();
 }}catch(ex){}
       }
     }
-    if(!fullContent&&!fullReason)bubble.textContent='(模型返回空)';
-    asstDiv.setAttribute('data-raw',fullContent);
+    let finalBody=renderBubble(true);
+    if(!rawAll&&!reasonApi)bubble.textContent='(模型返回空)';
+    asstDiv.setAttribute('data-raw',finalBody);
   }catch(e){
     bubble.textContent='连接失败: '+e.message;
     bubble.style.color='var(--red)';
@@ -1910,7 +1989,9 @@ function renderBenchGrid(){
   const groupDefs=[
     {key:'med_hard',icon:'activity',name:'医疗 Bench · Hard',meta:'test_hard · 高难子集',collapsed:true},
     {key:'med_full',icon:'layers',name:'医疗 Bench · 全量',meta:'test · 全量测试集',collapsed:true},
-    {key:'general',icon:'globe',name:'通用 Bench',meta:'MMLU / GSM8K / C-Eval / GPQA / AIME',collapsed:true},
+    {key:'general_follow',icon:'list-checks',name:'指令遵循',meta:'IFEval / IFBench / Inverse IFEval',collapsed:true},
+    {key:'general_knowledge',icon:'globe',name:'世界知识',meta:'MMLU / GSM8K / C-Eval',collapsed:true},
+    {key:'general_reasoning',icon:'brain-circuit',name:'推理能力',meta:'GPQA Diamond / AIME 2026',collapsed:true},
     {key:'general_subset',icon:'filter',name:'通用 Bench · 1000 子集',meta:'基于历史测评的错误聚焦子集',collapsed:true},
     {key:'s10',icon:'gauge',name:'采样 10%',meta:'EN + 中文 × hard / easy',collapsed:true},
     {key:'subset',icon:'sliders-horizontal',name:'自定义子集',meta:'自定义数据',collapsed:true}
@@ -1920,7 +2001,9 @@ function renderBenchGrid(){
   evalBenches.forEach(b=>{
     if(b.split==='test_hard')groups.med_hard.push(b);
     else if(b.split==='test')groups.med_full.push(b);
-    else if(b.split==='general')groups.general.push(b);
+    else if(b.split==='general_follow')groups.general_follow.push(b);
+    else if(b.split==='general_knowledge')groups.general_knowledge.push(b);
+    else if(b.split==='general_reasoning')groups.general_reasoning.push(b);
     else if(b.split==='general_subset')groups.general_subset.push(b);
     else if(b.split&&b.split.startsWith('sampled10'))groups.s10.push(b);
     else groups.subset.push(b);
@@ -1930,7 +2013,9 @@ function renderBenchGrid(){
     {key:'all',icon:'check-check',name:'全部'},
     {key:'med_hard',icon:'activity',name:'医疗 Hard'},
     {key:'med_full',icon:'layers',name:'医疗全量'},
-    {key:'general',icon:'globe',name:'通用全量'},
+    {key:'general_follow',icon:'list-checks',name:'指令遵循'},
+    {key:'general_knowledge',icon:'globe',name:'世界知识'},
+    {key:'general_reasoning',icon:'brain-circuit',name:'推理能力'},
     {key:'general_subset',icon:'filter',name:'通用子集'},
     {key:'s10',icon:'gauge',name:'采样 10%'},
     {key:'subset',icon:'sliders-horizontal',name:'自定义'}
@@ -2148,11 +2233,52 @@ function updateModelButton(){
   const sel=getSelectedModels();
   const btn=$('evalModelBtn');
   btn.querySelector('span').textContent=sel.length?('('+sel.length+') '):'选择模型';
+  renderEvalEffort();
+}
+
+/* 评测强度下拉: 选项 = 所选模型 thinking spec 的档位并集 (未勾选任何模型时
+   取全部模型的并集); 某模型不支持所选档位时 runner 侧按缺省跳过该模型。 */
+function renderEvalEffort(){
+  const field=$('evalEffortField');
+  if(!field)return;
+  const selected=getSelectedModels();
+  const keys=selected.length?selected:chatModelsCache.map(m=>m.key);
+  const labels={};let numMin=null,numMax=null;
+  chatModelsCache.forEach(m=>{
+    if(!keys.includes(m.key)||!m.thinking||!m.thinking.efforts)return;
+    Object.entries(m.thinking.efforts).forEach(([l,v])=>{if(!(l in labels))labels[l]=String(v)===l?l:l+' ('+v+')'});
+    if(m.thinking.numeric){
+      const a=m.thinking.numeric.min,b=m.thinking.numeric.max;
+      numMin=numMin==null?a:Math.max(numMin,a);numMax=numMax==null?b:Math.min(numMax,b);
+    }
+  });
+  const names=Object.keys(labels);
+  if(evalMode!=='cot'||!names.length){field.style.display='none';return}
+  field.style.display='';
+  const sel=$('evalEffort'),prev=sel.value;
+  let html='<option value="">默认(不传)</option>';
+  names.forEach(l=>{html+='<option value="'+escapeHtml(l)+'">'+escapeHtml(labels[l])+'</option>'});
+  if(numMin!=null&&numMax!=null&&numMin<=numMax)html+='<option value="__custom">自定义</option>';
+  sel.innerHTML=html;
+  sel.value=Array.from(sel.options).some(o=>o.value===prev)?prev:'';
+  if(numMin!=null){const n=$('evalEffortNum');n.min=numMin;n.max=numMax}
+  onEvalEffortChange();
+}
+function onEvalEffortChange(){
+  $('evalEffortNum').style.display=$('evalEffort').value==='__custom'?'':'none';
+}
+function getEvalEffortValue(){
+  if($('evalEffortField').style.display==='none')return undefined;
+  const v=$('evalEffort').value;
+  if(!v)return undefined;
+  if(v==='__custom'){const n=parseInt($('evalEffortNum').value,10);return isNaN(n)?undefined:n}
+  return v;
 }
 
 function setEvalMode(mode){
   evalMode=mode;
   document.querySelectorAll('#evalModeToggle button').forEach(b=>b.classList.toggle('active',b.dataset.mode===mode));
+  renderEvalEffort();
 }
 
 function evalStatusLabel(st){
@@ -2175,6 +2301,8 @@ function createEvalRun(rid,status,cfg){
     status:status||'running',
     mode:(cfg&&cfg.mode)||'',
     maxModelLen:(cfg&&cfg.max_model_len)||null,
+    temperature:(cfg&&cfg.temperature!=null)?cfg.temperature:null,
+    reasoningEffort:(cfg&&cfg.reasoning_effort!=null)?cfg.reasoning_effort:null,
     modelKeys:(cfg&&cfg.model_keys)||[],
     benchIds:(cfg&&cfg.bench_ids)||[],
     progressData:{},
@@ -2241,6 +2369,7 @@ function updateRunSummary(runId){
   const sum=el.querySelector('.run-summary');
   let txt=total?done+'/'+total:(totalPairs?donePairs+'/'+totalPairs:'');
   if(run.maxModelLen)txt=(txt?txt+' · ':'')+(run.maxModelLen>=1024?(run.maxModelLen/1024)+'k':'');
+  if(run.temperature)txt=(txt?txt+' · ':'')+'T'+run.temperature;
   if(sum)sum.textContent=txt;
 }
 function renderRunningEvalList(){
@@ -2274,6 +2403,8 @@ async function showEvalRun(runId){
       const rd=await(await fetch('/api/eval/run/'+runId)).json();
       run.mode=rd.config?.mode||run.mode;
       run.maxModelLen=rd.config?.max_model_len||null;
+      run.temperature=rd.config?.temperature??null;
+      run.reasoningEffort=rd.config?.reasoning_effort??null;
       run.modelKeys=rd.config?.model_keys||[];
       run.benchIds=rd.config?.bench_ids||[];
       run.status=rd.status||run.status;
@@ -2304,6 +2435,8 @@ function renderEvalProgress(runId){
   header+='<span style="font-family:var(--font-mono);font-size:11px;font-weight:600">'+escapeHtml(runId)+'</span>';
   if(run.mode)header+='<span style="font-size:11px;color:var(--text-dim)">'+escapeHtml(run.mode)+'</span>';
   if(run.maxModelLen)header+='<span style="font-size:11px;color:var(--text-dim)" title="max-model-len">长度 '+(run.maxModelLen>=1024?(run.maxModelLen/1024)+'k':run.maxModelLen)+'</span>';
+  if(run.temperature)header+='<span style="font-size:11px;color:var(--text-dim)" title="采样温度（0=贪心）">温度 '+run.temperature+'</span>';
+  if(run.reasoningEffort!=null)header+='<span style="font-size:11px;color:var(--text-dim)" title="思考强度 reasoning_effort">强度 '+escapeHtml(String(run.reasoningEffort))+'</span>';
   if(run.modelKeys.length||run.benchIds.length)header+='<span style="font-size:11px;color:var(--text-dim)">'+run.modelKeys.length+' 模型 · '+run.benchIds.length+' Bench</span>';
   if(run.error)header+='<span style="color:var(--red);font-size:11px">'+escapeHtml(run.error)+'</span>';
   if(run.status==='interrupted'||run.status==='stopped'||run.status==='aborted'||run.status==='completed'){
@@ -2345,6 +2478,7 @@ function handleEvalEvent(runId,ev){
   if(!run)return;
   if(ev.type==='start'){
     if(ev.mode)run.mode=ev.mode;
+    if(ev.temperature!=null)run.temperature=ev.temperature;
     if(ev.model_keys)run.modelKeys=ev.model_keys;
     if(ev.bench_ids)run.benchIds=ev.bench_ids;
     renderEvalProgressInit(runId,ev.model_keys||[],ev.bench_ids||[]);
@@ -2460,6 +2594,7 @@ async function resumeRun(runId){
     if(cfg.mode)run.mode=cfg.mode;
     if(cfg.model_keys)run.modelKeys=cfg.model_keys;
     if(cfg.bench_ids)run.benchIds=cfg.bench_ids;
+    if(cfg.temperature!=null)run.temperature=cfg.temperature;
     renderRunningEvalList();
     await showEvalRun(runId);
     streamEval(runId);
@@ -2475,7 +2610,9 @@ async function startEval(){
     const r=await fetch('/api/eval/run',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({model_keys:models,bench_ids:benches,mode:evalMode,
         workers:parseInt($('evalWorkers').value)||10,limit:parseInt($('evalLimit').value)||0,
-        no_resume:false,max_model_len:parseInt($('evalMaxLen').value)||null})});
+        no_resume:false,max_model_len:parseInt($('evalMaxLen').value)||null,
+        temperature:parseFloat($('evalTemp').value)||0,
+        reasoning_effort:getEvalEffortValue()})});
     const d=await r.json();
     if(!r.ok){
       let msg=d.detail||JSON.stringify(d);
@@ -2483,7 +2620,9 @@ async function startEval(){
       alert('启动失败: '+msg);
       return;
     }
-    createEvalRun(d.run_id,'running',{mode:evalMode,model_keys:models,bench_ids:benches});
+    createEvalRun(d.run_id,'running',{mode:evalMode,model_keys:models,bench_ids:benches,
+      temperature:parseFloat($('evalTemp').value)||0,
+      reasoning_effort:getEvalEffortValue()});
     renderRunningEvalList();
     await showEvalRun(d.run_id);
     streamEval(d.run_id);
@@ -2543,7 +2682,7 @@ async function loadEvalRuns(){
         return '<tr onclick="showRunDetail(\''+r.run_id+'\')">'+
           '<td style="font-family:var(--font-mono);font-size:11px">'+escapeHtml(r.run_id)+'</td>'+
           '<td style="font-family:var(--font-mono);font-size:11px;white-space:nowrap">'+escapeHtml((cfg.started_at||'-').replace('T',' ').slice(0,19))+'</td>'+
-          '<td>'+escapeHtml(cfg.mode||'-')+'</td>'+
+          '<td>'+escapeHtml(cfg.mode||'-')+lbEffortTag(cfg)+'</td>'+
           '<td style="font-size:11px;line-height:1.5">'+
             (modelDesc?'<div style="color:var(--text);font-weight:500">'+escapeHtml(modelDesc)+'</div>':'')+
             (benchDesc?'<div style="color:var(--text-dim)">'+escapeHtml(benchDesc)+'</div>':'')+
@@ -2569,7 +2708,7 @@ async function showRunDetail(runId){
     let html='<h3><i data-lucide="file-text" class="h3-icon"></i>Run: <span class="modal-name">'+escapeHtml(runId)+'</span></h3>';
     const modelLabels=(cfg.model_keys||[]).map(k=>evalModelNames[k]||k).join(', ');
     const benchLabels=(cfg.bench_ids||[]).map(id=>benchNameOf(id)||id).join(', ');
-    html+='<div style="font-size:12px;color:var(--text-dim);margin-bottom:8px">Mode: '+escapeHtml(cfg.mode||'-')+' | Models: '+escapeHtml(modelLabels)+' | Benches: '+escapeHtml(benchLabels)+'</div>';
+    html+='<div style="font-size:12px;color:var(--text-dim);margin-bottom:8px">Mode: '+escapeHtml(cfg.mode||'-')+lbEffortTag(cfg)+' | Models: '+escapeHtml(modelLabels)+' | Benches: '+escapeHtml(benchLabels)+'</div>';
     if(results.length){
       html+='<div class="result-row head"><span>Model</span><span>Bench</span><span>Done</span><span>Correct</span><span>Accuracy</span></div>';
       html+=results.map(x=>{
@@ -2619,6 +2758,12 @@ function lbLenValue(e){
   const v=e.max_model_len;
   return (Number.isFinite(v)&&v>0)?v:16384; // old/no-config entries bucket to the launch default
 }
+/* 榜单行身份 = 模型 + 思考强度(未指定=空): 不同强度的成绩分开成行/分开删除 */
+function lbRowKey(e){return (e.model_key||'')+'|'+(e.reasoning_effort==null?'':String(e.reasoning_effort))}
+function lbEffortTag(cfg){
+  const v=cfg&&cfg.reasoning_effort;
+  return (v==null||v==='')?'':' <span style="font-size:10px;color:var(--text-dim);font-weight:500" title="思考强度 reasoning_effort">强度 '+escapeHtml(String(v))+'</span>';
+}
 
 function setLbLen(v){
   lbLenFilter=v;
@@ -2647,12 +2792,12 @@ function renderLeaderboard(){
     );
     if(!items.length)continue;
     hasData=true;
-    const models=[...new Set(items.map(e=>e.model_key))];
+    const models=[...new Set(items.map(lbRowKey))];
     shownModels+=models.length;
     const benches=[...new Set(items.map(e=>e.bench_id+':'+e.bench_name))];
-    // per-model avg
+    // per-row avg (模型+强度)
     const avgOf=mk=>{
-      const es=items.filter(e=>e.model_key===mk&&Number.isFinite(e.accuracy));
+      const es=items.filter(e=>lbRowKey(e)===mk&&Number.isFinite(e.accuracy));
       if(!es.length)return null;
       if(lbAvgMode==='weighted'){
         let ws=0,wc=0;
@@ -2682,13 +2827,13 @@ function renderLeaderboard(){
     });
     html+='<th></th></tr></thead><tbody>';
     models.forEach(mk=>{
-      const mc=items.find(e=>e.model_key===mk);
-      const modelLabel=mc?mc.model_name:mk;
-      html+='<tr><td>'+escapeHtml(modelLabel)+'</td>';
+      const mc=items.find(e=>lbRowKey(e)===mk);
+      const modelLabel=mc?mc.model_name:mk.split('|')[0];
+      html+='<tr><td>'+escapeHtml(modelLabel)+lbEffortTag(mc)+'</td>';
       html+='<td><b>'+(modelAvgs[mk]==null?'\u2014':modelAvgs[mk].toFixed(1)+'%')+'</b></td>';
       benches.forEach(b=>{
         const bid=b.split(':')[0];
-        const e=items.find(x=>x.model_key===mk&&x.bench_id===bid);
+        const e=items.find(x=>lbRowKey(x)===mk&&x.bench_id===bid);
         if(e){
           const acc=Number.isFinite(e.accuracy)?e.accuracy:null;
           const isBest=acc!=null&&acc===benchBest[bid]&&acc>0;
@@ -2697,7 +2842,7 @@ function renderLeaderboard(){
           html+='<td>-</td>';
         }
       });
-      html+='<td><button class="btn btn-xs danger" onclick="deleteLbEntries(\''+ck+'\',\''+mk+'\',\''+lbLenFilter+'\')"><i data-lucide="trash-2"></i></button></td>';
+      html+='<td><button class="btn btn-xs danger" onclick="deleteLbEntries(\''+ck+'\',\''+escapeHtml((mc&&mc.model_key)||mk.split('|')[0])+'\',\''+lbLenFilter+'\',\''+escapeHtml(String((mc&&mc.reasoning_effort!=null)?mc.reasoning_effort:''))+'\')"><i data-lucide="trash-2"></i></button></td>';
       html+='</tr>';
     });
     html+='</tbody></table></div></div>';
@@ -2752,7 +2897,7 @@ async function openImportModal(){
       const results=summ.results||[];
       const avgAcc=results.length?(results.reduce((s,x)=>s+(x.accuracy||0),0)/results.length).toFixed(1)+'%':'-';
       html+='<div class="import-item">'+
-        '<div class="ii-name">'+escapeHtml(r.run_id)+'<br><span class="ii-meta">'+escapeHtml(cfg.mode||'')+' | '+(cfg.model_keys||[]).length+'模型 | '+(cfg.bench_ids||[]).length+'bench | '+avgAcc+'</span></div>'+
+        '<div class="ii-name">'+escapeHtml(r.run_id)+'<br><span class="ii-meta">'+escapeHtml(cfg.mode||'')+lbEffortTag(cfg)+' | '+(cfg.model_keys||[]).length+'模型 | '+(cfg.bench_ids||[]).length+'bench | '+avgAcc+'</span></div>'+
         '<button class="btn btn-xs primary" onclick="importRun(\''+r.run_id+'\')"><i data-lucide="download"></i>导入</button>'+
         '</div>';
     });
@@ -2776,13 +2921,15 @@ async function importRun(runId){
   }catch(e){alert('Failed: '+e)}
 }
 
-async function deleteLbEntries(category,modelKey,len){
+async function deleteLbEntries(category,modelKey,len,effort){
   const lv=len?Number(len):null;
-  if(!confirm('删除 '+modelKey+(lv!==null?'（长度 '+lv+'）':'')+' 在此分榜的记录?'))return;
+  const eff=(effort==null)?'':String(effort);
+  if(!confirm('删除 '+modelKey+(eff?'（强度 '+eff+'）':'')+(lv!==null?'（长度 '+lv+'）':'')+' 在此分榜的记录?'))return;
   try{
     const data=lbData.entries[category]||[];
     for(const e of data){
-      if(e.model_key===modelKey&&(lv===null||lbLenValue(e)===lv)){
+      const eEff=(e.reasoning_effort==null)?'':String(e.reasoning_effort);
+      if(e.model_key===modelKey&&eEff===eff&&(lv===null||lbLenValue(e)===lv)){
         await fetch('/api/eval/leaderboard/'+e.id,{method:'DELETE'});
       }
     }

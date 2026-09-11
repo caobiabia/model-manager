@@ -95,7 +95,7 @@ def _save_user_models(data: dict[str, dict]) -> None:
     _cfg()  # reload so MODELS reflects the change immediately
 
 
-app = FastAPI(title="CSP Model Manager")
+app = FastAPI(title="Model Console")
 app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
 
 _procs: dict[str, subprocess.Popen] = {}
@@ -132,6 +132,22 @@ def _probe_vllm(port: int) -> list[str]:
         import httpx  # noqa: PLC0415
         with httpx.Client(timeout=3) as c:
             r = c.get(f"http://127.0.0.1:{port}/v1/models")
+            if r.status_code == 200:
+                return [m["id"] for m in r.json().get("data", [])]
+    except Exception:
+        pass
+    return []
+
+
+def _probe_base_url(base_url: str) -> list[str]:
+    """Return model IDs on a (possibly remote) OpenAI-compatible endpoint.
+
+    Entries carrying an explicit base_url are served on another host, so
+    localhost port scanning never sees them alive; probe /v1/models instead."""
+    try:
+        import httpx  # noqa: PLC0415
+        with httpx.Client(timeout=3) as c:
+            r = c.get(f"{base_url.rstrip('/')}/models")
             if r.status_code == 200:
                 return [m["id"] for m in r.json().get("data", [])]
     except Exception:
@@ -320,6 +336,9 @@ class ChatRequest(BaseModel):
     max_tokens: int = 2048
     stream: bool = True
     enable_thinking: bool = True
+    # 思考强度: 档位 label (如 "low") 或原始数值 (如 37); None = 不传, 用模型默认
+    # 合法值域由模型配置条目的 thinking 字段声明 (model_config.py)
+    reasoning_effort: str | int | None = None
 
 
 # ——— helpers ————
@@ -451,17 +470,23 @@ async def list_models() -> list[dict[str, Any]]:
     async def _probe(p: int) -> list[str]:
         return await loop.run_in_executor(_thread_pool, _probe_vllm, p)
 
+    async def _probe_remote(u: str) -> list[str]:
+        return await loop.run_in_executor(_thread_pool, _probe_base_url, u)
+
     port_alive: dict[str, bool] = {}
-    probe_futures: dict[str, asyncio.Task[list[str]]] = {}
+    probe_futures: dict[str, list[str]] = {}
     for key, cfg in _cfg().MODELS.items():
+        if cfg.get("base_url"):
+            found = await _probe_remote(cfg["base_url"])
+            port_alive[key] = bool(found)
+            if found:
+                probe_futures[key] = found
+            continue
         p = cfg.get("port")
         if p:
             port_alive[key] = await _check_port(p)
             if port_alive[key]:
-                probe_futures[key] = asyncio.ensure_future(_probe(p))
-
-    for key in probe_futures:
-        probe_futures[key] = await probe_futures[key]
+                probe_futures[key] = await _probe(p)
 
     descriptions = _load_descriptions()
     result: list[dict[str, Any]] = []
@@ -479,7 +504,8 @@ async def list_models() -> list[dict[str, Any]]:
             "provider": cfg.get("provider", "vllm"),
             "port": cfg.get("port"),
             "gpu": cfg.get("gpu"),
-            "max_model_len": cfg.get("vllm_args", {}).get("max-model-len", 16384),
+            "max_model_len": cfg.get("vllm_args", {}).get(
+                "max-model-len", _cfg().DEFAULT_VLLM_ARGS.get("max-model-len", 262144)),
             "running": alive,
             "description": descriptions.get(key, ""),
         }
@@ -493,6 +519,9 @@ async def list_models() -> list[dict[str, Any]]:
             elif has_port:
                 entry["models_on_port"] = probe_futures.get(key, [])
             entry["started_at"] = _start_times.get(key, "")
+        thinking = cfg.get("thinking")
+        if isinstance(thinking, dict):
+            entry["thinking"] = thinking  # 前端据此渲染思考强度控件
         result.append(entry)
     return result
 
@@ -610,7 +639,8 @@ async def launch_model(model_key: str, body: LaunchRequest = LaunchRequest()):
             gpu_warning = f"GPU {gpu} has running processes: {procs_str}"
 
         # Build CLI from config (not hardcoded flags!)
-        default_ml = cfg.get("vllm_args", {}).get("max-model-len", 16384)
+        default_ml = cfg.get("vllm_args", {}).get(
+            "max-model-len", _cfg().DEFAULT_VLLM_ARGS.get("max-model-len", 262144))
         max_len = body.max_model_len or default_ml
 
         cmd = _build_vllm_cmd(
@@ -910,14 +940,65 @@ async def health():
 # ——— chat ————
 
 def _model_is_running(model_key: str) -> bool:
-    """Return True if the vLLM model is running (tracked proc or port open)."""
+    """Return True if the vLLM model is running (tracked proc or endpoint alive)."""
     proc = _procs.get(model_key)
     if proc is not None and proc.poll() is None:
         return True
     cfg = _cfg().MODELS.get(model_key)
+    if cfg and cfg.get("base_url"):
+        return bool(_probe_base_url(cfg["base_url"]))
     if cfg and cfg.get("port"):
         return _port_open(cfg["port"])
     return False
+
+
+def _thinking_kwargs(cfg: dict, enable_thinking: bool,
+                     reasoning_effort: str | int | None) -> tuple[dict, dict]:
+    """Build upstream thinking params from the model's `thinking` spec.
+
+    Returns (chat_template_kwargs, extra_top_level_fields). reasoning_effort=None
+    means "don't send the param, use the model default". Raises HTTPException(400)
+    when the model declares no effort capability or the value is out of range.
+    """
+    # thinking / enable_thinking 双 key 同值下发: 不同模型的 chat template 变量名不一
+    # 致, DeepSeek-V4.1 文档明确两 key 同发必须一致 — 同值总满足
+    ctk: dict[str, Any] = {"enable_thinking": enable_thinking,
+                           "thinking": enable_thinking}
+    extra: dict[str, Any] = {}
+    if reasoning_effort is None or not enable_thinking:
+        return ctk, extra
+
+    spec = cfg.get("thinking")
+    if not isinstance(spec, dict):
+        raise HTTPException(
+            400, f"模型 {cfg.get('display_name', '?')} 不支持思考强度调节")
+
+    efforts: dict = spec.get("efforts") or {}
+    numeric: dict | None = spec.get("numeric")
+    wire: Any = None
+    if isinstance(reasoning_effort, str) and reasoning_effort in efforts:
+        wire = efforts[reasoning_effort]
+    elif numeric is not None:
+        try:
+            n = int(reasoning_effort)
+        except (TypeError, ValueError):
+            n = None
+        if n is not None and numeric.get("min", 0) <= n <= numeric.get("max", 10**9):
+            wire = n
+    if wire is None:
+        allowed = ", ".join(f"{k}({v})" if k != str(v) else k
+                            for k, v in efforts.items())
+        if numeric:
+            allowed += f", 或 {numeric.get('min')}-{numeric.get('max')} 的整数"
+        raise HTTPException(
+            400,
+            f"无效的思考强度 '{reasoning_effort}'。可选: {allowed or '无'}")
+
+    if spec.get("transport", "chat_template_kwargs") == "top_level":
+        extra["reasoning_effort"] = wire
+    else:
+        ctk["reasoning_effort"] = wire
+    return ctk, extra
 
 
 @app.post("/api/chat")
@@ -933,19 +1014,20 @@ async def chat(req: ChatRequest):
                 503,
                 f"Model '{req.model_key}' is not running. Launch it first.",
             )
-        base_url = f"http://localhost:{cfg['port']}/v1"
+        base_url = cfg.get("base_url") or f"http://localhost:{cfg['port']}/v1"
         api_key = "not-needed"
     else:
         base_url = cfg.get("base_url", "")
         api_key = cfg.get("api_key", "")
 
     messages = [{"role": m.role, "content": m.content} for m in req.messages]
+    ctk, extra = _thinking_kwargs(cfg, req.enable_thinking, req.reasoning_effort)
 
     if req.stream:
         return StreamingResponse(
             _stream(base_url, api_key, cfg["served_model_name"],
                     messages, req.temperature, req.max_tokens,
-                    enable_thinking=req.enable_thinking),
+                    chat_template_kwargs=ctk, extra_body=extra),
             media_type="text/event-stream",
         )
     else:
@@ -961,7 +1043,7 @@ async def chat(req: ChatRequest):
                         "model": cfg["served_model_name"], "messages": messages,
                         "temperature": req.temperature, "max_tokens": req.max_tokens,
                         "stream": False,
-                        "chat_template_kwargs": {"enable_thinking": req.enable_thinking},
+                        "chat_template_kwargs": ctk, **extra,
                     })
                 if resp.status_code != 200:
                     raise HTTPException(resp.status_code, resp.text[:500])
@@ -977,21 +1059,26 @@ async def chat(req: ChatRequest):
 
 async def _stream(base_url: str, api_key: str, model: str,
                   messages: list[dict], temperature: float, max_tokens: int,
-                  enable_thinking: bool = True):
+                  chat_template_kwargs: dict | None = None,
+                  extra_body: dict | None = None):
     import httpx  # noqa: PLC0415
     headers = {"Content-Type": "application/json"}
     if api_key and api_key != "not-needed":
         headers["Authorization"] = f"Bearer {api_key}"
+    body: dict[str, Any] = {
+        "model": model, "messages": messages,
+        "temperature": temperature, "max_tokens": max_tokens,
+        "stream": True,
+    }
+    if chat_template_kwargs:
+        body["chat_template_kwargs"] = chat_template_kwargs
+    if extra_body:
+        body.update(extra_body)
     try:
         async with httpx.AsyncClient(timeout=600) as client:
             async with client.stream(
                 "POST", f"{base_url}/chat/completions", headers=headers,
-                json={
-                    "model": model, "messages": messages,
-                    "temperature": temperature, "max_tokens": max_tokens,
-                    "stream": True,
-                    "chat_template_kwargs": {"enable_thinking": enable_thinking},
-                },
+                json=body,
             ) as resp:
                 if resp.status_code != 200:
                     body = await resp.aread()
@@ -1029,6 +1116,10 @@ class EvalRunRequest(BaseModel):
     limit: int = 0
     no_resume: bool = False
     max_model_len: int | None = None  # None = auto from each model's config
+    temperature: float | None = None  # None = greedy decoding (0.0)
+    # 可选思考强度 (档位 label 或数值), 按各模型 thinking spec 解析;
+    # None = 不发参数, 与历史跑分行为一致
+    reasoning_effort: str | int | None = None
 
 
 @app.get("/api/eval/benches")
@@ -1059,6 +1150,8 @@ async def eval_start_run(req: EvalRunRequest) -> dict[str, Any]:
         raise HTTPException(400, "At least one bench is required")
     if req.mode not in ("zero_shot", "cot"):
         raise HTTPException(400, f"Invalid mode: {req.mode}")
+    if req.temperature is not None and not (0.0 <= req.temperature <= 2.0):
+        raise HTTPException(400, f"Invalid temperature: {req.temperature} (must be 0.0–2.0)")
 
     cfg = _cfg()
     for key in req.model_keys:
@@ -1083,6 +1176,8 @@ async def eval_start_run(req: EvalRunRequest) -> dict[str, Any]:
         limit=req.limit,
         no_resume=req.no_resume,
         max_model_len=req.max_model_len,
+        temperature=req.temperature,
+        reasoning_effort=req.reasoning_effort,
     )
     _eval_runs[run_id] = {"runner": runner, "status": "running"}
 
@@ -1090,12 +1185,12 @@ async def eval_start_run(req: EvalRunRequest) -> dict[str, Any]:
         try:
             runner.run()
             # runner.run() returns normally even after a stop signal. Derive
-            # the true end state from the runner itself: an internal auto-abort
-            # (e.g. too many consecutive errors) sets stopped/error without the
-            # stop endpoint ever touching _eval_runs, which previously let an
-            # aborted run be mis-labeled "completed" in memory and then surface
-            # that way in the UI. Only a genuinely finished run becomes
-            # "completed".
+            # the true end state from the runner itself: a user stop sets
+            # stopped without the stop endpoint ever touching _eval_runs,
+            # which previously let a stopped run be mis-labeled "completed"
+            # in memory and then surface that way in the UI. (An unreachable
+            # model no longer aborts the run: its failing questions are
+            # circuit-broken and scored 0, so the run completes.)
             if _eval_runs[run_id]["status"] == "running":
                 if runner.stopped:
                     _eval_runs[run_id]["status"] = "stopped"
@@ -1279,6 +1374,8 @@ async def eval_resume_run(run_id: str):
         limit=config.get("limit", 0),
         no_resume=False,
         max_model_len=config.get("max_model_len"),
+        temperature=config.get("temperature"),
+        reasoning_effort=config.get("reasoning_effort"),
     )
     # Initialize progress from disk BEFORE putting in _eval_runs,
     # so the GET /progress endpoint returns correct data immediately
@@ -1289,12 +1386,12 @@ async def eval_resume_run(run_id: str):
         try:
             runner.run()
             # runner.run() returns normally even after a stop signal. Derive
-            # the true end state from the runner itself: an internal auto-abort
-            # (e.g. too many consecutive errors) sets stopped/error without the
-            # stop endpoint ever touching _eval_runs, which previously let an
-            # aborted run be mis-labeled "completed" in memory and then surface
-            # that way in the UI. Only a genuinely finished run becomes
-            # "completed".
+            # the true end state from the runner itself: a user stop sets
+            # stopped without the stop endpoint ever touching _eval_runs,
+            # which previously let a stopped run be mis-labeled "completed"
+            # in memory and then surface that way in the UI. (An unreachable
+            # model no longer aborts the run: its failing questions are
+            # circuit-broken and scored 0, so the run completes.)
             if _eval_runs[run_id]["status"] == "running":
                 if runner.stopped:
                     _eval_runs[run_id]["status"] = "stopped"
@@ -1321,7 +1418,9 @@ async def eval_list_runs() -> list[dict[str, Any]]:
         elif "status" not in run:
             run["status"] = "unknown"
     disk_ids = {r.get("run_id") for r in disk_runs}
-    for rid, entry in _eval_runs.items():
+    # Snapshot + deferred pops: mutating _eval_runs mid-iteration raises
+    # RuntimeError, and runner threads also write to it concurrently.
+    for rid, entry in list(_eval_runs.items()):
         if rid not in disk_ids:
             # Only show in-memory runs that are still actively running;
             # skip phantom entries whose output dirs were deleted.
@@ -1490,8 +1589,13 @@ async def index():
 
 if __name__ == "__main__":
     import uvicorn
-    # reload watches csp_dev/ (app + template edits). Config edits apply
-    # live via _cfg() above, so the workspace dir is intentionally NOT
-    # watched (it holds training checkpoints/log churn that would spam
-    # reloads and interrupt in-flight chat requests).
-    uvicorn.run("app:app", host="0.0.0.0", port=27000, reload=True)
+    # reload watches app + templates. Config edits apply live via _cfg()
+    # above, so model_config.py is excluded — editing it used to trigger a
+    # graceful reload that then hung forever waiting on the frontend's
+    # never-closing SSE streams (logs/chat), taking port 27000 down.
+    # timeout_graceful_shutdown caps that wait for any remaining real reloads.
+    uvicorn.run(
+        "app:app", host="0.0.0.0", port=27000, reload=True,
+        reload_excludes=["model_config.py"],
+        timeout_graceful_shutdown=5,
+    )

@@ -31,15 +31,17 @@ from eval.common import (
     create_client,
     extract_answer,
     extract_free_answer,
-    extract_patch,
     get_extract_model,
     save_progress,
+    strip_think,
 )
 from eval.benches import get_bench
 from model_config import get_model_by_name
 
-# Abort a (model, bench) pair after this many consecutive failures
-# (indicates the model is unreachable / misconfigured).
+# Circuit-break a model after this many consecutive failures within one
+# (model, bench) pair (indicates the model is unreachable / every request
+# is timing out). The model's remaining questions are then scored 0 — the
+# run itself keeps going and must NOT be reported as an error.
 MAX_CONSECUTIVE_ERRORS = 5
 
 class EvalRunner:
@@ -55,6 +57,8 @@ class EvalRunner:
         limit: int = 0,
         no_resume: bool = False,
         max_model_len: int | None = None,
+        temperature: float | None = None,
+        reasoning_effort=None,
     ):
         self.run_id = run_id
         self.model_keys = model_keys
@@ -64,6 +68,10 @@ class EvalRunner:
         self.limit = limit
         self.no_resume = no_resume
         self.max_model_len = max_model_len  # optional override; None = auto per model
+        self.temperature = temperature  # None = greedy decoding (0.0)
+        # Optional thinking-effort request (label or number, per each model's
+        # `thinking` spec); None = model-side default, preserving old behavior
+        self.reasoning_effort = reasoning_effort
 
         self.queue: Queue[dict | None] = Queue()
         self._stop = threading.Event()
@@ -76,6 +84,20 @@ class EvalRunner:
         # live progress snapshot, updated alongside queue events
         self.progress: dict[str, dict] = {}
         self._progress_lock = Lock()
+        # model_key -> reason, set when a bench circuit-breaks the model
+        # (MAX_CONSECUTIVE_ERRORS consecutive failures). All benches of that
+        # model then stop probing and score their remaining questions 0.
+        self._dead_models: dict[str, str] = {}
+        self._dead_lock = Lock()
+
+    def _mark_model_dead(self, model_key: str, reason: str) -> None:
+        """Circuit-break a model for all its benches (first reason wins)."""
+        with self._dead_lock:
+            self._dead_models.setdefault(model_key, reason)
+
+    def _model_dead_reason(self, model_key: str) -> str | None:
+        with self._dead_lock:
+            return self._dead_models.get(model_key)
 
     # -- public API -------------------------------------------------------
 
@@ -173,6 +195,8 @@ class EvalRunner:
                 "type": "start",
                 "run_id": self.run_id,
                 "mode": self.mode,
+                "temperature": self.temperature,
+                "reasoning_effort": self.reasoning_effort,
                 "model_keys": self.model_keys,
                 "bench_ids": self.bench_ids,
                 "total_pairs": len(self.model_keys) * len(self.bench_ids),
@@ -285,7 +309,7 @@ class EvalRunner:
                 target=self._run_bench,
                 args=(model_key, bench_id, client, model_name,
                       is_deepseek, ext_client, ext_model, ext_deepseek,
-                      get_quota, reallocate),
+                      get_quota, reallocate, cfg.get("thinking")),
             )
             threads.append(t)
             t.start()
@@ -306,6 +330,7 @@ class EvalRunner:
         ext_deepseek: bool,
         get_quota,
         reallocate,
+        thinking_spec: dict | None = None,
     ) -> None:
         bench = get_bench(bench_id)
         if bench is None:
@@ -431,6 +456,11 @@ class EvalRunner:
         start_time = time.time()
         consecutive_errors = 0
         aborted = False
+        # Set when the model circuit-broke (directly or via a sibling bench).
+        # The remaining questions are then filled with zero-score results so
+        # the pair still reaches total/total and the run completes cleanly.
+        unreachable = False
+        unreachable_error = ""
 
         # Per-(model, bench) persistence. Each bench writes only its own
         # results list/file, and only from this thread, so no shared global
@@ -467,7 +497,6 @@ class EvalRunner:
             options = problem.get("options", {})
             answer_idx = problem.get("answer_idx", "")
             is_free = getattr(bench, "format", "mcq") == "free"
-            is_patch = getattr(bench, "format", "mcq") == "patch"
             is_follow = getattr(bench, "format", "mcq") == "follow"
             gold = (
                 str(problem.get("answer", answer_idx)).strip()
@@ -475,7 +504,7 @@ class EvalRunner:
             )
             if not question:
                 return None
-            if not is_free and not is_patch and not is_follow and not options:
+            if not is_free and not is_follow and not options:
                 return None
 
             messages = bench.build_messages(problem, self.mode)
@@ -484,17 +513,27 @@ class EvalRunner:
             try:
                 raw, reasoning, usage = call_model(
                     client, model_name, messages, self.mode, is_deepseek,
-                    max_tokens=200000 if is_patch else None,
+                    temperature=self.temperature,
+                    reasoning_effort=self.reasoning_effort,
+                    thinking_spec=thinking_spec,
                 )
             except Exception as e:
-                return {"realidx": realidx, "error": str(e)}
+                # Request failure (timeout / unreachable): score this
+                # question 0 and keep the bench going.
+                return {"realidx": realidx, "error": str(e), "correct": False}
+
+            # vLLM without --reasoning-parser returns the thinking inline in
+            # the content; pull it out so extractors/verifiers only see the
+            # final answer (it is kept in `reasoning` for inspection).
+            emb_reason, raw = strip_think(raw)
+            reasoning = reasoning or emb_reason
 
             correct = None
             correct_loose = None
             if is_follow:
                 # No single extractable answer: correctness comes from the
                 # per-bench scorer (IFEval/IFBench verifier or Inverse IFEval
-                # LLM-judge). The raw response is kept for inspection.
+                # LLM-judge), applied to the stripped final answer.
                 pred = None
                 scorer = getattr(bench, "scorer", None)
                 if scorer is not None:
@@ -506,16 +545,12 @@ class EvalRunner:
                     correct_loose = bool(scorer_loose(raw, problem))
             elif is_free:
                 pred = extract_free_answer(raw)
-            elif is_patch:
-                pred = extract_patch(raw)
-                if pred is None:
-                    pred = extract_patch(reasoning)
             else:
                 pred = extract_answer(
                     raw, options, ext_client, ext_model, ext_deepseek,
                 )
 
-            if not is_follow and not is_patch and pred is not None:
+            if not is_follow and pred is not None:
                 correct = (pred == gold)
 
             prompt_tokens = usage.prompt_tokens if usage else 0
@@ -538,13 +573,6 @@ class EvalRunner:
                 },
                 "time_elapsed": elapsed,
             }
-            if is_patch:
-                result["instance_id"] = problem.get("instance_id", "")
-                result["repo"] = problem.get("repo", "")
-                result["base_commit"] = problem.get("base_commit", "")
-                result["predicted_patch"] = pred or ""
-                result["patch_generated"] = bool(pred)
-                result.pop("predicted_answer", None)
             return result
 
         # -- rolling submission driven by a dynamic concurrency quota --
@@ -572,10 +600,27 @@ class EvalRunner:
                     idx, q.get("realidx", idx))
                 next_idx += 1
 
-        # Pre-fill the pool with the current quota
-        _submit_more(get_quota(bench_id))
+        # Pre-fill the pool with the current quota. If a sibling bench has
+        # already circuit-broken this model, don't even submit: go straight
+        # to the zero-fill below.
+        dead_reason = self._model_dead_reason(model_key)
+        if dead_reason:
+            aborted = True
+            unreachable = True
+            unreachable_error = dead_reason
+        else:
+            _submit_more(get_quota(bench_id))
 
         while future_map:
+            # A sibling bench may already have circuit-broken this model:
+            # stop probing immediately, the zero-fill below finishes us.
+            dead_reason = self._model_dead_reason(model_key)
+            if dead_reason and not aborted:
+                aborted = True
+                unreachable = True
+                unreachable_error = dead_reason
+                break
+
             # Wait for at least one future to complete (poll every 2s)
             done_set, _ = concurrent.futures.wait(
                 future_map.keys(),
@@ -599,7 +644,7 @@ class EvalRunner:
                 try:
                     result = future.result()
                 except Exception as e:
-                    result = {"realidx": realidx, "error": str(e)}
+                    result = {"realidx": realidx, "error": str(e), "correct": False}
 
                 if result is not None:
                     results.append(result)
@@ -614,17 +659,21 @@ class EvalRunner:
                     save_progress(progress_file, realidx)
                 completed += 1
 
-                # Track consecutive errors
+                # Track consecutive errors. A burst of failures means the
+                # model is unreachable (or every request times out while the
+                # server is still generating). This must NOT fail the run:
+                # circuit-break the model, score its remaining questions 0.
                 if result and "error" in result:
                     consecutive_errors += 1
                     if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
-                        aborted = True
-                        self.error = (
+                        unreachable_error = (
                             f"Model '{model_key}' appears unreachable "
                             f"({MAX_CONSECUTIVE_ERRORS} consecutive failures). "
                             f"Last error: {result.get('error', 'unknown')}"
                         )
-                        self._stop.set()
+                        self._mark_model_dead(model_key, unreachable_error)
+                        aborted = True
+                        unreachable = True
                         break
                 else:
                     consecutive_errors = 0
@@ -655,8 +704,43 @@ class EvalRunner:
             if aborted:
                 break
 
-        # Shutdown: if stopped, don't wait for in-flight API calls
-        executor.shutdown(wait=not self.stopped, cancel_futures=self.stopped)
+        # Shutdown: if stopped or the model is unreachable, don't wait for
+        # in-flight API calls (a dead endpoint can hang until the request
+        # timeout, and we are going to score those questions 0 anyway).
+        dropping = self.stopped or unreachable
+        executor.shutdown(wait=not dropping, cancel_futures=dropping)
+
+        # Unreachable model: score every not-yet-processed question 0 so the
+        # pair reaches total/total and the run completes instead of erroring.
+        # (If the user stopped the run concurrently, skip this — the
+        # unfinished questions stay retryable on resume.)
+        if unreachable and not self.stopped:
+            done_realidxs = {str(r.get("realidx")) for r in results}
+            is_free = getattr(bench, "format", "mcq") == "free"
+            for i, q in enumerate(questions):
+                realidx = q.get("realidx", i)
+                if str(realidx) in done_realidxs:
+                    continue
+                answer_idx = q.get("answer_idx", "")
+                gold = (
+                    str(q.get("answer", answer_idx)).strip()
+                    if is_free else answer_idx
+                )
+                results.append({
+                    "realidx": realidx,
+                    "question": q.get("question", ""),
+                    "options": q.get("options", {}),
+                    "answer_idx": gold,
+                    "predicted_answer": "",
+                    "correct": False,
+                    "correct_loose": None,
+                    "raw_response": "",
+                    "reasoning": "",
+                    "token_usage": {"prompt_tokens": 0, "completion_tokens": 0},
+                    "time_elapsed": 0,
+                    "error": unreachable_error,
+                })
+                save_progress(progress_file, realidx)
 
         # Persist any buffered results so the on-disk file is complete.
         flush_results()
@@ -697,7 +781,10 @@ class EvalRunner:
             "time_elapsed": round(elapsed, 0),
             "results_file": results_file,
             "aborted": aborted,
+            "unreachable": unreachable,
         }
+        if unreachable_error:
+            summary["error"] = unreachable_error
         self.results[(model_key, bench_id)] = summary
         early_stopped = bool(self.stopped and processed_count < total)
         with self._progress_lock:
@@ -714,6 +801,7 @@ class EvalRunner:
             "processed": processed_count, "correct": correct_count,
             "accuracy": accuracy, "time": round(elapsed, 0),
             "aborted": aborted, "stopped": self.stopped,
+            "unreachable": unreachable, "error": unreachable_error or None,
         })
 
         # This bench is done; hand its worker budget back so a still-running
@@ -733,6 +821,8 @@ class EvalRunner:
             "model_keys": self.model_keys,
             "bench_ids": self.bench_ids,
             "mode": self.mode,
+            "temperature": self.temperature,
+            "reasoning_effort": self.reasoning_effort,
             "max_model_len": self.max_model_len,
             "workers": self.workers,
             "limit": self.limit,

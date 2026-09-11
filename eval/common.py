@@ -18,20 +18,21 @@ from threading import Lock
 from openai import OpenAI
 
 # -- path setup -----------------------------------------------------------
-# eval/common.py  ->  csp_dev/  ->  workspace/  ->  /mntnlp/csp
+# 医疗评测数据在 eval/data_medical/ (H200 仓库内自托管, 不再依赖父目录)
 _EVAL_DIR = Path(__file__).resolve().parent
 _CSP_DEV = _EVAL_DIR.parent
 _WORKSPACE = _CSP_DEV.parent
 _CSP_ROOT = _WORKSPACE.parent
 
-if str(_WORKSPACE) not in sys.path:
-    sys.path.insert(0, str(_WORKSPACE))
+for _p in (_CSP_DEV, _WORKSPACE):  # model_config 现位于仓库内 (H200)
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
 
 from model_config import MODELS, get_model_by_name, get_base_url  # noqa: E402
 
 # -- data / output paths --------------------------------------------------
-BENCHMARK_DATA_DIR = _CSP_ROOT / "MedicalAgentsBench-1.0" / "data"
-SUBSET_DATA_FILE = _CSP_ROOT / "eval" / "test_subset.jsonl"
+BENCHMARK_DATA_DIR = _EVAL_DIR / "data_medical"
+SUBSET_DATA_FILE = _EVAL_DIR / "test_subset.jsonl"
 EVAL_OUTPUT_DIR = _EVAL_DIR / "output"
 
 
@@ -96,18 +97,74 @@ def create_client(cfg: dict) -> tuple[OpenAI, str, bool]:
 def get_extract_model() -> tuple[OpenAI, str, bool]:
     """Return ``(client, model_name, is_deepseek)`` for answer extraction.
 
-    Uses the remote DeepSeek-V4-Flash vLLM instance (114.55.210.21:26006)
-    in non-reasoning mode.
+    TEMP: switched from the remote Qwen3.8-27B instance
+    (http://114.55.210.21:26008/v1) to the local vLLM instance
+    Qwen3.6-35B-A3B (127.0.0.1:26001) in non-reasoning mode
+    (``chat_template_kwargs.enable_thinking=False``, hence is_deepseek=False).
+    Restore base_url/model_name below when the remote instance is back.
     The extraction model is mandatory: MCQ answers must be extracted by an
     LLM extractor, so a missing local instance raises an error instead of
     silently falling back to regex.
     """
-    base_url = "http://114.55.210.21:26006/v1"
-    model_name = "DeepSeek-V4-Flash"
-    return OpenAI(api_key="not-needed", base_url=base_url), model_name, True
+    base_url = "http://127.0.0.1:26001/v1"
+    model_name = "Qwen/Qwen3.6-35B-A3B"
+    return OpenAI(api_key="not-needed", base_url=base_url), model_name, False
 
 
 # -- model calling ---------------------------------------------------------
+
+_server_max_tokens_cache: dict[str, int | None] = {}
+_server_max_tokens_lock = Lock()
+
+
+def _server_max_tokens(client: OpenAI) -> int | None:
+    """Total context length of the serving engine (cached per client URL).
+
+    vLLM reports ``max_model_len`` on each entry of the OpenAI-compatible
+    ``/models`` listing and rejects requests with ``max_tokens`` above it
+    (HTTP 400). Returns ``None`` for servers/SDK versions that don't expose
+    the field, in which case no capping is applied.
+    """
+    key = str(client.base_url)
+    with _server_max_tokens_lock:
+        if key in _server_max_tokens_cache:
+            return _server_max_tokens_cache[key]
+    value: int | None = None
+    try:
+        for m in client.models.list():
+            if getattr(m, "id", None) and getattr(m, "max_model_len", None):
+                value = int(m.max_model_len)
+                break
+    except Exception:
+        value = None
+    with _server_max_tokens_lock:
+        _server_max_tokens_cache[key] = value
+    return value
+
+
+def resolve_effort(spec: dict | None, value) -> object | None:
+    """Map a requested thinking-effort (label or raw number) through a model's
+    `thinking` spec (see model_config.py) to its wire value.
+
+    Returns None when the model declares no capability, no value was requested,
+    or the value is invalid for that model — callers then fall back to the
+    model-side default.
+    """
+    if value is None or not isinstance(spec, dict):
+        return None
+    efforts = spec.get("efforts") or {}
+    if isinstance(value, str) and value in efforts:
+        return efforts[value]
+    numeric = spec.get("numeric")
+    if numeric is not None:
+        try:
+            n = int(value)
+        except (TypeError, ValueError):
+            return None
+        if numeric.get("min", 0) <= n <= numeric.get("max", 10**9):
+            return n
+    return None
+
 
 def call_model(
     client: OpenAI,
@@ -117,30 +174,60 @@ def call_model(
     is_deepseek: bool,
     max_tokens: int | None = None,
     max_retries: int = 3,
+    temperature: float | None = None,
+    reasoning_effort=None,
+    thinking_spec: dict | None = None,
 ) -> tuple[str, str, object | None]:
     """Call a chat model with mode-appropriate thinking settings.
+
+    ``temperature`` defaults the request to greedy decoding (0.0); pass a
+    value > 0 to sample instead. It is only applied where the mode already
+    sends a temperature (cot via Deepseek APIs relies on server defaults).
 
     Returns ``(raw_response, reasoning, usage)``.
     """
     kwargs: dict = dict(model=model_name, messages=messages, seed=42)
+    temp = 0.0 if temperature is None else temperature
     if mode == "zero_shot":
-        kwargs["temperature"] = 0.0
+        kwargs["temperature"] = temp
         kwargs["max_tokens"] = max_tokens or 1024
         if is_deepseek:
             kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
         else:
             kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": False}}
     else:  # cot
-        # Eval cap is 200k tokens for reasoning-heavy COT (avoid truncation);
-        # vLLM servers are launched with max-model-len=262144 (256k).
-
+        # Eval cap is 200k tokens for reasoning-heavy COT (avoid truncation),
+        # lowered to the serving engine's context when it reports one.
         kwargs["max_tokens"] = max_tokens or 200000
+        # Optional per-run thinking effort; resolved through the model's
+        # `thinking` spec. None (unsupported / invalid / not requested) keeps
+        # the previous behavior: model-side default for vLLM, "high" for the
+        # DeepSeek API provider.
+        wire = resolve_effort(thinking_spec, reasoning_effort)
+        top_level = (thinking_spec or {}).get("transport") == "top_level"
         if is_deepseek:
-            kwargs["reasoning_effort"] = "high"
+            kwargs["reasoning_effort"] = wire if wire is not None else "high"
             kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
         else:
-            kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": True}}
-            kwargs["temperature"] = 0.0
+            ctk: dict = {"enable_thinking": True}
+            if wire is not None and not top_level:
+                ctk["reasoning_effort"] = wire
+            kwargs["extra_body"] = {"chat_template_kwargs": ctk}
+            if wire is not None and top_level:
+                kwargs["reasoning_effort"] = wire
+            kwargs["temperature"] = temp
+
+    # vLLM requires prompt + max_tokens <= max_model_len (HTTP 400).
+    # Cap the request against the server's context, reserving room for the
+    # prompt (estimated as at most its character count in tokens, which is
+    # safe for CJK-heavy inputs) plus chat-template overhead.
+    srv_max = _server_max_tokens(client)
+    if srv_max:
+        est_prompt = sum(len(m.get("content") or "") for m in messages)
+        kwargs["max_tokens"] = min(
+            kwargs["max_tokens"],
+            max(256, srv_max - est_prompt - 256),
+        )
 
     for attempt in range(max_retries):
         try:
@@ -214,44 +301,33 @@ def extract_free_answer(text: str) -> str | None:
     return None
 
 
-_DIFF_LINE_RE = re.compile(
-    r"^(diff |index |--- |\+\+\+ |@@ |[ +\-@\\]|"
-    r"new file mode|deleted file mode|similarity index|"
-    r"rename from|rename to|copy from|copy to|Binary files?)"
-)
+# -- inline think splitting ------------------------------------------------
+
+_THINK_FULL_RE = re.compile(r"^<think>([\s\S]*?)</think>")
 
 
-def extract_patch(text: str) -> str | None:
-    """Extract a unified diff / code patch from a model response.
+def strip_think(text: str) -> tuple[str, str]:
+    """Split an inline think block out of a raw model response.
 
-    Prefers a fenced diff/patch/python block; otherwise finds the first
-    ``diff --git`` marker and keeps all diff-looking lines after it.
-    Returns ``None`` when no patch-like content is found.
+    vLLM servers launched without ``--reasoning-parser`` return the model's
+    thinking inside ``message.content``: either as a complete
+    ``<think>...</think>`` block or (Qwen-style chat templates consume the
+    opening tag in the generation prompt) as thinking text terminated by a
+    bare ``</think>``. Responses with no closing ``</think>`` -- thinking
+    disabled, a backend that separates reasoning, or a model that answered
+    directly -- are returned unchanged.
+
+    Returns ``(thinking, final_answer)``.
     """
     if not text:
-        return None
-
-    # fenced blocks first
-    for block in re.findall(r"```[A-Za-z+-]*\s*\n(.*?)```", text, re.S):
-        block = block.strip()
-        if not block:
-            continue
-        if "diff --git" in block or "@@" in block or block.startswith("--- "):
-            return block
-
-    # raw unified diff: start at the first diff header
-    m = re.search(r"^diff --git .*$", text, re.M)
+        return "", ""
+    m = _THINK_FULL_RE.match(text)
     if m:
-        lines = text[m.start():].splitlines()
-        out: list[str] = []
-        for line in lines:
-            if _DIFF_LINE_RE.match(line) or line == r"\ No newline at end of file":
-                out.append(line)
-            elif out:
-                break
-        if out:
-            return "\n".join(out).strip()
-    return None
+        return m.group(1).strip(), text[m.end():].strip()
+    i = text.find("</think>")
+    if i >= 0:
+        return text[:i].strip(), text[i + len("</think>"):].strip()
+    return "", text
 
 
 _MAX_EXTRACT_INPUT_CHARS = 32768
