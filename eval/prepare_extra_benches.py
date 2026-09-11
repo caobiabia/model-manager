@@ -8,7 +8,6 @@ record shape used by the runner:
 
 * GPQA Diamond       -> hendrydong/gpqa_diamond_mc  (198 questions, 4-choice MCQ)
 * AIME 2026          -> MathArena/aime_2026         (30 problems, integer answers)
-* SWE-bench Verified -> princeton-nlp/SWE-bench_Verified (500 instances, patch)
 
 Run from the repo root:
 
@@ -17,10 +16,6 @@ Run from the repo root:
 Notes:
 * The original GPQA dataset (Idavidrein/gpqa) is gated on HuggingFace; this
   script uses a public mirror with the same Diamond split.
-* SWE-bench is a "patch generation" bench: the runner stores the generated
-  patch for every instance. Final PASS_TO_PASS/FAIL_TO_PASS scoring must be
-  done with the official SWE-bench harness (needs Docker) -- see
-  ``eval/export_swebench_predictions.py``.
 """
 
 from __future__ import annotations
@@ -40,7 +35,7 @@ OUT_DIR = Path(__file__).resolve().parent / "data_general"
 
 def prepare_gpqa() -> None:
     """GPQA Diamond: 198 expert-written PhD-level science MCQs."""
-    print("[1/3] GPQA Diamond (hendrydong/gpqa_diamond_mc, test)")
+    print("[1/2] GPQA Diamond (hendrydong/gpqa_diamond_mc, test)")
     target = OUT_DIR / "GPQA-Diamond" / "test.jsonl"
     if target.exists():
         print(f"  already prepared ({target.stat().st_size / 1024:.0f} KB) -- skipping")
@@ -104,7 +99,7 @@ def prepare_gpqa() -> None:
 
 def prepare_aime2026() -> None:
     """AIME 2026: 30 competition problems with integer answers (0-999)."""
-    print("[2/3] AIME 2026 (MathArena/aime_2026, train split)")
+    print("[2/2] AIME 2026 (MathArena/aime_2026, train split)")
     target = OUT_DIR / "AIME2026" / "test.jsonl"
     if target.exists():
         print(f"  already prepared ({target.stat().st_size / 1024:.0f} KB) -- skipping")
@@ -128,55 +123,10 @@ def prepare_aime2026() -> None:
     write_jsonl(records, target)
 
 
-def prepare_swebench_verified() -> None:
-    """SWE-bench Verified: 500 human-validated GitHub issue instances."""
-    print("[3/3] SWE-bench Verified (princeton-nlp/SWE-bench_Verified, test)")
-    target = OUT_DIR / "SWE-bench-Verified" / "test.jsonl"
-    if target.exists():
-        print(f"  already prepared ({target.stat().st_size / 1024:.0f} KB) -- skipping")
-        return
-    parquet = download(
-        "princeton-nlp/SWE-bench_Verified",
-        "data/test-00000-of-00001.parquet",
-    )
-    df = pd.read_parquet(parquet)
-    if len(df) != 500:
-        raise RuntimeError(f"SWE-bench Verified should have 500 instances, got {len(df)}")
-
-    def _listish(v):
-        if v is None:
-            return []
-        return list(v) if not isinstance(v, str) else [v]
-
-    records: list[dict] = []
-    for i, row in enumerate(df.itertuples()):
-        records.append({
-            "realidx": i,
-            "question": str(row.problem_statement),
-            "subject": str(row.repo),
-            "options": {},
-            "answer_idx": "",
-            "answer": "",
-            "instance_id": str(row.instance_id),
-            "repo": str(row.repo),
-            "base_commit": str(row.base_commit),
-            "patch": str(row.patch),
-            "test_patch": str(row.test_patch),
-            "FAIL_TO_PASS": _listish(row.FAIL_TO_PASS),
-            "PASS_TO_PASS": _listish(row.PASS_TO_PASS),
-            "hints_text": str(row.hints_text or ""),
-            "version": str(row.version or ""),
-            "environment_setup_commit": str(row.environment_setup_commit or ""),
-            "difficulty": str(row.difficulty or ""),
-        })
-    write_jsonl(records, target)
-
-
 def main() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     prepare_gpqa()
     prepare_aime2026()
-    prepare_swebench_verified()
     print("Done. Benches are registered in eval/benches.py.")
 
 

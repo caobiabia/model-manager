@@ -132,29 +132,6 @@ _FOLLOW_COT_SYSTEM = (
 )
 _FOLLOW_COT_USER = "{question}"
 
-# SWE-bench -- free-form unified diff patch generation
-_SWE_ZS_SYSTEM = (
-    "You are an expert software engineer. Given a GitHub issue, produce "
-    "a complete patch that resolves it. Output only the unified diff, "
-    "with no extra explanation."
-)
-_SWE_ZS_USER = (
-    "Repository: {repo}\nBase commit: {base_commit}\n\n"
-    "Issue:\n{question}\n\n"
-    "Produce a complete git diff patch that fixes this issue. Output only "
-    "the patch."
-)
-_SWE_COT_SYSTEM = (
-    "You are an expert software engineer. Think step-by-step about how to "
-    "fix the GitHub issue, then output the final complete patch."
-)
-_SWE_COT_USER = (
-    "Repository: {repo}\nBase commit: {base_commit}\n\n"
-    "Issue:\n{question}\n\n"
-    "Think step-by-step about the fix, then output the final patch as a "
-    "unified diff inside a code block."
-)
-
 
 @dataclass
 class Bench:
@@ -172,11 +149,9 @@ class Bench:
                    (instruction following -- scored by a verifier/judge).
         prompt_style: English prompt family: ``"med"`` (medical MCQ),
                       ``"general"`` (general MCQ), ``"gsm8k"`` / ``"aime"``
-                      (free-form math), ``"swebench"`` (patch generation), or
-                      ``"follow"`` (instruction-following benches).
+                      (free-form math), or ``"follow"``
+                      (instruction-following benches).
         scorable: whether the runner can compute an inline accuracy.
-                  False for benches whose correctness requires an external
-                  harness (e.g. SWE-bench patch test execution).
         scorer:   optional callable ``scorer(raw_response, question) -> bool``
                   used to compute per-question correctness for
                   ``format=="follow"`` benches (built-in verifiers/judges).
@@ -233,29 +208,6 @@ class Bench:
             return [
                 {"role": "system", "content": _GSM8K_COT_SYSTEM},
                 {"role": "user", "content": _GSM8K_COT_USER.format(question=q_text)},
-            ]
-
-        if self.format == "patch":
-            repo = question.get("repo", "")
-            base_commit = question.get("base_commit", "")
-            if mode == "zero_shot":
-                return [
-                    {"role": "system", "content": _SWE_ZS_SYSTEM},
-                    {
-                        "role": "user",
-                        "content": _SWE_ZS_USER.format(
-                            repo=repo, base_commit=base_commit, question=q_text
-                        ),
-                    },
-                ]
-            return [
-                {"role": "system", "content": _SWE_COT_SYSTEM},
-                {
-                    "role": "user",
-                    "content": _SWE_COT_USER.format(
-                        repo=repo, base_commit=base_commit, question=q_text
-                    ),
-                },
             ]
 
         if self.format == "follow":
@@ -401,8 +353,9 @@ for _ds in [
 
 # -- standard general benches: MMLU / GSM8K / C-Eval ----------------------
 # Prepared by eval/prepare_general_benches.py into eval/data_general/.
-# These sit in the "general" group (split == "general") in the UI, separate
-# from the MedicalAgentsBench medical datasets.
+# These sit in three UI groups, separate from the MedicalAgentsBench medical
+# datasets: general_follow (instruction following), general_knowledge
+# (MMLU/GSM8K/C-Eval) and general_reasoning (GPQA Diamond/AIME 2026).
 
 _GENERAL_DATA_DIR = Path(__file__).resolve().parent / "data_general"
 
@@ -413,7 +366,7 @@ if _mmlu_test.exists():
         name="MMLU (\u6807\u51c6 57\u79d1)",  # MMLU (标准 57科)
         data_file=_mmlu_test,
         language="en",
-        split="general",
+        split="general_knowledge",
         prompt_style="general",
         description="Standard MMLU test (57 subjects, 14,042 questions)",
     ))
@@ -425,7 +378,7 @@ if _gsm8k_test.exists():
         name="GSM8K",
         data_file=_gsm8k_test,
         language="en",
-        split="general",
+        split="general_knowledge",
         format="free",
         prompt_style="gsm8k",
         description="Grade-school math word problems (test, 1,319 questions)",
@@ -438,58 +391,11 @@ if _ceval_test.exists():
         name="C-Eval",
         data_file=_ceval_test,
         language="zh",
-        split="general",
+        split="general_knowledge",
         description="C-Eval test (52 subjects, 12,342 questions)",
     ))
 
-# -- qwen35b error-focused subsets (run 20260803_175115) ------------------
-# Composition (based on the fine-tuned model's current results):
-#   * MMLU:  all tested-wrong + correct/untested fill -> 1000
-#   * GSM8K: all wrong + random correct -> 1000
-#   * C-Eval: 250 wrong + random correct -> 1000
-# Each record keeps its original realidx plus a "subset_origin" tag.
-
-_mmlu_sub = _GENERAL_DATA_DIR / "MMLU" / "subset.jsonl"
-if _mmlu_sub.exists():
-    register(Bench(
-        id="mmlu_std_sub",
-        name="MMLU (1000\u5b50\u96c6)",  # MMLU (1000子集)
-        data_file=_mmlu_sub,
-        language="en",
-        split="general_subset",
-        prompt_style="general",
-        description="MMLU 1000-question subset: tested-wrong + correct/untested "
-                    "fill (based on qwen35b run 20260803_175115)",
-    ))
-
-_gsm8k_sub = _GENERAL_DATA_DIR / "GSM8K" / "subset.jsonl"
-if _gsm8k_sub.exists():
-    register(Bench(
-        id="gsm8k_sub",
-        name="GSM8K (1000\u5b50\u96c6)",  # GSM8K (1000子集)
-        data_file=_gsm8k_sub,
-        language="en",
-        split="general_subset",
-        format="free",
-        prompt_style="gsm8k",
-        description="GSM8K 1000-question subset: all tested-wrong + random "
-                    "correct fill (based on qwen35b run 20260803_175115)",
-    ))
-
-_ceval_sub = _GENERAL_DATA_DIR / "C-Eval" / "subset.jsonl"
-if _ceval_sub.exists():
-    register(Bench(
-        id="ceval_sub",
-        name="C-Eval (1000\u5b50\u96c6)",  # C-Eval (1000子集)
-        data_file=_ceval_sub,
-        language="zh",
-        split="general_subset",
-        description="C-Eval 1000-question subset: 250 tested-wrong + 750 "
-                    "random correct (based on qwen35b run 20260803_175115)",
-    ))
-
-
-# -- extra general benches: GPQA Diamond / AIME 2026 / SWE-bench ---------
+# -- extra general benches: GPQA Diamond / AIME 2026 ----------------------
 # Prepared by eval/prepare_extra_benches.py into eval/data_general/.
 
 _gpqa_test = _GENERAL_DATA_DIR / "GPQA-Diamond" / "test.jsonl"
@@ -499,7 +405,7 @@ if _gpqa_test.exists():
         name="GPQA Diamond",
         data_file=_gpqa_test,
         language="en",
-        split="general",
+        split="general_reasoning",
         prompt_style="general",
         description="Graduate-Level Google-Proof Q&A Diamond (198 PhD-level "
                     "biology/physics/chemistry MCQs)",
@@ -512,30 +418,12 @@ if _aime_test.exists():
         name="AIME 2026",
         data_file=_aime_test,
         language="en",
-        split="general",
+        split="general_reasoning",
         format="free",
         prompt_style="aime",
         description="American Invitational Mathematics Examination 2026 "
                     "(30 problems, integer answers 0-999)",
     ))
-
-# SWE-bench Verified 暂缓（下掉）：本环境没有 Docker，无法跑官方 harness
-# 出分；生成 patch 不能当作正确率。等有 Docker 评测环境后，取消下面注释
-# 并运行 eval/prepare_extra_benches.py 重新准备数据即可恢复。
-# _swe_test = _GENERAL_DATA_DIR / "SWE-bench-Verified" / "test.jsonl"
-# if _swe_test.exists():
-#     register(Bench(
-#         id="swebench_verified",
-#         name="SWE-bench Verified",
-#         data_file=_swe_test,
-#         language="en",
-#         split="general",
-#         format="patch",
-#         prompt_style="swebench",
-#         scorable=False,
-#         description="500 human-validated GitHub issues; runner saves "
-#                     "generated patches, official harness scoring required",
-#     ))
 
 # -- instruction-following benches: IFEval / IFBench / Inverse IFEval -----
 # Prepared by eval/prepare_follow_benches.py into eval/data_general/.
@@ -570,7 +458,7 @@ if _ifeval_test.exists():
         name="IFEval",
         data_file=_ifeval_test,
         language="en",
-        split="general",
+        split="general_follow",
         format="follow",
         prompt_style="follow",
         scorer=_lazy_follow_scorer(),
@@ -586,7 +474,7 @@ if _ifbench_test.exists():
         name="IFBench",
         data_file=_ifbench_test,
         language="en",
-        split="general",
+        split="general_follow",
         format="follow",
         prompt_style="follow",
         scorer=_lazy_follow_scorer(),
@@ -602,7 +490,7 @@ if _inverse_test.exists():
         name="Inverse IFEval",
         data_file=_inverse_test,
         language="en",
-        split="general",
+        split="general_follow",
         format="follow",
         prompt_style="follow",
         scorer=_lazy_inverse_judge(),

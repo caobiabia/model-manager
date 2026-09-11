@@ -44,8 +44,12 @@ def _bench_category(bench_id: str) -> str:
             return "full"
         if split.startswith("sampled10"):
             return "s10"
-        if split == "general":
-            return "general"
+        if split == "general_follow":
+            return "general_follow"
+        if split == "general_knowledge":
+            return "general_knowledge"
+        if split == "general_reasoning":
+            return "general_reasoning"
         if split == "general_subset":
             return "general_subset"
         return "subset"
@@ -79,6 +83,8 @@ def import_run(
         config = json.loads(config_file.read_text(encoding="utf-8"))
 
     mode = summary.get("mode", config.get("mode", "?"))
+    # 思考强度 (档位 label 或数值); None = 未指定/模型不支持, 与旧条目等价
+    effort = config.get("reasoning_effort", summary.get("reasoning_effort"))
     results = summary.get("results", [])
     if not results:
         return {"ok": False, "error": "Run has no results"}
@@ -106,6 +112,7 @@ def import_run(
             "bench_name": bench_name,
             "category": category,
             "mode": mode,
+            "reasoning_effort": effort,
             "max_model_len": r.get("max_model_len"),
             "accuracy": r.get("accuracy", 0),
             "correct": r.get("correct", 0),
@@ -116,13 +123,16 @@ def import_run(
             "imported_at": datetime.now().isoformat(),
         }
 
-        # upsert: replace existing entry with same (model_key, bench_id, mode)
+        # upsert: replace existing entry with same
+        # (model_key, bench_id, mode, reasoning_effort, max_model_len) — runs at
+        # different thinking efforts stay separate entries
         found = False
         for i, e in enumerate(entries):
             if (
                 e.get("model_key") == model_key
                 and e.get("bench_id") == bench_id
                 and e.get("mode") == mode
+                and e.get("reasoning_effort") == entry.get("reasoning_effort")
                 and e.get("max_model_len") == entry.get("max_model_len")
             ):
                 entries[i] = entry
@@ -145,14 +155,19 @@ def import_run(
 def get_leaderboard() -> dict[str, Any]:
     """Return leaderboard entries grouped by category.
 
-    Categories shown to users are: hard, full, general, general_subset.
+    Categories shown to users are: hard, full, general_follow,
+    general_knowledge, general_reasoning, general_subset.
     The removed historical categories (s10 "Sampled 10%" and medqa_cn
     "subset") are deliberately excluded from the response so the UI no longer
     renders them; their stored entries remain in leaderboard.json. `total`
     still reflects the full stored count.
     """
     entries = _load()
-    SHOWN = ("hard", "full", "general", "general_subset")
+    SHOWN = (
+        "hard", "full",
+        "general_follow", "general_knowledge", "general_reasoning",
+        "general_subset",
+    )
     categories: dict[str, list[dict]] = {c: [] for c in SHOWN}
     for e in entries:
         cat = e.get("category", "hard")
@@ -162,8 +177,10 @@ def get_leaderboard() -> dict[str, Any]:
         "categories": {
             "hard": "Hard (test_hard)",
             "full": "Test (test)",
-            "general": "\u901a\u7528 Bench (MMLU/GSM8K/C-Eval/GPQA/AIME)",
-            "general_subset": "\u901a\u7528\u5b50\u96c6 (MMLU/GSM8K/C-Eval)",
+            "general_follow": "指令遵循 (IFEval/IFBench/Inverse IFEval)",
+            "general_knowledge": "世界知识 (MMLU/GSM8K/C-Eval)",
+            "general_reasoning": "推理能力 (GPQA Diamond/AIME 2026)",
+            "general_subset": "通用子集 (MMLU/GSM8K/C-Eval)",
         },
         "entries": categories,
         "total": len(entries),
@@ -255,19 +272,20 @@ def export_to_xlsx(
             bid = e.get("bench_id", "")
             if bid not in bench_order:
                 bench_order.append(bid)
-        model_order: list[str] = []
+        # 行身份 = (model_key, 思考强度): 同一模型不同强度的成绩分行展示
+        model_order: list[tuple[str, Any]] = []
         for e in items:
-            mk = e.get("model_key", "")
+            mk = (e.get("model_key", ""), e.get("reasoning_effort"))
             if mk not in model_order:
                 model_order.append(mk)
 
-        avg_cache: dict[str, float | None] = {}
+        avg_cache: dict[tuple[str, Any], float | None] = {}
 
-        def avg_acc(mk: str) -> float | None:
+        def avg_acc(mk: tuple[str, Any]) -> float | None:
             if mk not in avg_cache:
                 es = [
                     e for e in items
-                    if e.get("model_key") == mk
+                    if (e.get("model_key"), e.get("reasoning_effort")) == mk
                     and isinstance(e.get("accuracy"), (int, float))
                 ]
                 if not es:
@@ -325,15 +343,20 @@ def export_to_xlsx(
             cell.alignment = center
             cell.border = border
 
-        def first_entry(mk: str, bid: str):
+        def first_entry(mk: tuple[str, Any], bid: str):
             return next(
-                (e for e in items if e.get("model_key") == mk and e.get("bench_id") == bid),
+                (e for e in items
+                 if (e.get("model_key"), e.get("reasoning_effort")) == mk
+                 and e.get("bench_id") == bid),
                 None,
             )
 
         for mk in model_order:
             e0 = first_entry(mk, bench_order[0]) if bench_order else None
-            row = [e0.get("model_name", mk) if e0 else mk, avg_acc(mk)]
+            name = e0.get("model_name", mk[0]) if e0 else mk[0]
+            if mk[1] is not None:
+                name = f"{name} (强度 {mk[1]})"
+            row = [name, avg_acc(mk)]
             for bid in bench_order:
                 e = first_entry(mk, bid)
                 acc = e.get("accuracy") if e and isinstance(e.get("accuracy"), (int, float)) else None
