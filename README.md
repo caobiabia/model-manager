@@ -1,7 +1,46 @@
-# csp_dev — vLLM 模型管理 & 聊天界面
+# model_console — vLLM 模型管理 & 聊天界面
 
 一个基于 FastAPI 的 Web 应用,用于在本地启动/扫描 vLLM 模型并与之聊天。
 后端在**前台进程**中拉起 vLLM,通过 SSE 实时推送日志;前端是单文件单页应用。
+
+## H200 部署说明(2026-09-02 迁移)
+
+本项目从 `yiling:/mntnlp/csp/workspace/csp_dev` 迁移到
+`H200:/home/users/caoshipeng/workspace/model_console`,目录已更名
+`csp_dev -> model_console`。本 README 其余部分描述的 yiling 旧路径
+(`/mntnlp/...`)在 H200 上不存在,以下方替换关系为准:
+
+| yiling 旧位置 | H200 新位置 |
+| --- | --- |
+| `/mntnlp/csp/workspace/csp_dev/` | `~/workspace/model_console/` |
+| `/mntnlp/csp/workspace/model_config.py` | `model_console/model_config.py`(仓库内唯一一份,**当前为空占位**,需为 H200 填写模型条目;迁移时已去掉符号链接结构) |
+| `/mntnlp/csp/workspace/.venv` | 尚未创建,见下方快速开始 |
+| `serve.py` / `eval_models.py` 等上层脚本 | 暂未迁移,仍在 yiling |
+
+医疗评测数据位置: MedicalAgentsBench 已收进仓库内
+,另有
+;两者均在  中(可从 yiling
+ 重导)。
+
+H200 上**只有一份 `model_config.py`,就在仓库目录里**,直接编辑即可
+(yiling 时代的父目录 + 符号链接结构已在迁移时拆除)。`app.py` 每次
+请求热重载配置,改完即生效,不用重启服务。
+
+### 快速开始(在 H200 上)
+
+```bash
+cd ~/workspace/model_console
+python3 -m venv .venv && source .venv/bin/activate
+pip install fastapi uvicorn httpx          # 界面/聊天所需最小依赖
+# 需要用界面启动 vLLM 时再装: pip install vllm
+python app.py                               # 监听 0.0.0.0:27000
+```
+
+浏览器访问 `http://<H200地址>:27000/`(公网被安全组挡住时可走 SSH 隧道:
+`ssh -N -L 27000:127.0.0.1:27000 H200`)。
+
+远端仓库仍为 `git@github.com:caobiabia/model-manager.git`,迁移时通过
+`git clone` 保留了完整提交历史。
 
 ## 组成
 
@@ -9,17 +48,17 @@
 | --- | --- |
 | `app.py` | FastAPI 后端:启动 vLLM、端口扫描自动探测已在运行的模型、聊天转发、SSE 日志流、按需热重载配置 |
 | `templates/index.html` | 单文件前端:内联 CSS/JS,使用 Lucide 图标、KaTeX 数学渲染、Inter 字体 |
-| `model_config.py` | 符号链接 → `../model_config.py`(见下文) |
+| `model_config.py` | 模型配置唯一数据源,仓库内实体文件(H200 版已去符号链接) |
 
 ## model_config.py
 
-`model_config.py` 是「启动、评测、benchmark 的唯一数据源」,定义了全部模型(11 个)。
-它位于**父目录** `/mntnlp/csp/workspace/model_config.py`,不在本仓库目录内,
-因此本仓库通过一个相对符号链接 `model_config.py -> ../model_config.py` 把它纳入版本管理。
+`model_config.py` 是「启动、评测、benchmark 的唯一数据源」。
+在 yiling 原部署中它放在上层 workspace 目录,由 `serve.py` 等兄弟脚本共享,仓库通过
+`../model_config.py` 符号链接纳入管理;迁移到 H200 后这些脚本未随行,已简化为
+**仓库内单份实体文件**。
 
-`app.py` 用 `_workspace = Path(__file__).resolve().parents[1]` 把父目录加入 `sys.path`,
-再 `import model_config`;运行时无需依赖符号链接即可正常导入。符号链接主要用于:
-仓库可追踪该配置文件、以及在 `csp_dev/` 目录直接 `python -c "import model_config"` 时可用。
+`app.py` 启动时把所在目录加入 `sys.path` 后 `import model_config`,配置即随仓库
+自洽;直接 `python -c "import model_config"` 也可用。
 
 后端还提供 `_cfg()` —— 每次请求时 `importlib.reload(model_config)`,使配置编辑**无需重启服务**即可生效。
 
@@ -95,7 +134,8 @@ python app.py
 
 `medqa` `pubmedqa` `medmcqa` `mmlu` `mmlu-pro` `medbullets` `afrimedqa` `medexqa` `medxpertqa-r` `medxpertqa-u` `medqa_cn`
 
-通用 Bench（`eval/data_general/`，UI 中归入「通用 Bench」分组）：
+通用 Bench（`eval/data_general/`），UI 中按能力分三组展示：「世界知识」(`mmlu_std`/`gsm8k`/`ceval`)、
+「推理能力」(`gpqa_diamond`/`aime2026`)、「指令遵循」(`ifeval`/`ifbench`/`inverse_ifeval`)：
 
 `mmlu_std`（标准 MMLU，57 科 14,042 题） `gsm8k`（GSM8K test，1,319 题，自由数字作答） `ceval`（C-Eval test，52 科 12,342 题） `gpqa_diamond`（GPQA Diamond，198 题） `aime2026`（AIME 2026，30 题，整数作答）
 
@@ -105,7 +145,7 @@ python app.py
 
 数据由 `eval/prepare_general_benches.py` 从 HuggingFace 下载并转换为统一 JSONL 格式
 （默认走 hf-mirror.com，可用 `HF_ENDPOINT` 覆盖）。GSM8K 是自由作答 bench
-（`format="free"`），runner 用正则提取末尾数字并与标准答案精确匹配。GPQA / AIME 2026 /
+（`format="free"`），runner 用正则提取末尾数字并与标准答案精确匹配。GPQA / AIME 2026
 由 `eval/prepare_extra_benches.py` 下载转换（GPQA 原仓库在 HuggingFace 上需申请访问权限，
 脚本使用公开镜像的同一 Diamond 子集）。
 
@@ -121,16 +161,10 @@ python app.py
 > `averaged_perceptron_tagger_eng`）在首次运行 verifier 时自动下载到
 > `eval/follow/.nltk_data`（已 gitignore）。
 
-> SWE-bench Verified 暂缓接入：本环境没有 Docker，无法跑官方 harness 出分。`eval/benches.py`
-> 里保留了注册代码（已注释），等有 Docker 评测环境后取消注释、运行
-> `eval/prepare_extra_benches.py` 即可恢复；`eval/export_swebench_predictions.py` 用于把
-> 生成的 patch 导出成官方 harness 的 predictions 格式。
-
 ### 扩展
 
 在 `eval/benches.py` 末尾调用 `register(Bench(...))` 即可添加新 bench。只需提供 `id`、`name`、`data_file`、`language`，runner 自动处理其余逻辑。
 新增自由作答类 bench（如数学题）时设置 `format="free"`，并把标准答案写入记录的 `answer` 字段；
-新增补丁生成类 bench（如 SWE-bench）时设置 `format="patch"` 与 `scorable=False`；
 新增指令遵循类 bench 时设置 `format="follow"` 并传入 `scorer(raw_response, question) -> bool`
 （内置 verifier：IFEval/IFBench 用 `eval.follow.verify_follow_strict`，Inverse IFEval 用
 `eval.follow.judge.judge_inverse_ifeval`）。

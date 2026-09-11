@@ -29,9 +29,15 @@ node_modules/
 .idea/
 .vscode/
 
+# Agent tooling (local session state)
+.zcode/
+
 # Eval output (results, checkpoints)
 eval/output/
 eval/leaderboard.json
 
 # Repo-local NLTK corpora downloaded by the IFEval/IFBench verifiers
 eval/follow/.nltk_data/
+
+# 医疗评测数据(仓库内托管,14M,可从 yiling 重导)
+eval/data_medical/
