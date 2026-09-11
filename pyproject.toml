@@ -1,0 +1,22 @@
+[project]
+name = "model-console"
+version = "0.1.0"
+description = "vLLM 模型管理 & 聊天界面 (FastAPI)"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "httpx",
+    "openai",
+    "nltk>=3.10.3",
+    "absl-py>=2.5.0",
+    "emoji>=2.15.0",
+    "immutabledict>=4.3.1",
+    "langdetect>=1.0.9",
+    "syllapy>=0.8.0",
+    "watchfiles>=1.2.0",
+    "openpyxl>=3.1.0",
+]
+
+[tool.uv]
+package = false
