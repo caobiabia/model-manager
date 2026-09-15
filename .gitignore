@@ -36,6 +36,9 @@ node_modules/
 eval/output/
 eval/leaderboard.json
 
+# 错题分析产物 (eval/wrong_answers.py 输出, 数百 MB)
+eval/analysis/
+
 # Repo-local NLTK corpora downloaded by the IFEval/IFBench verifiers
 eval/follow/.nltk_data/
 

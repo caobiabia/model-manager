@@ -17,6 +17,27 @@ from eval.common import _EVAL_DIR
 from eval.benches import get_bench
 
 LB_FILE = _EVAL_DIR / "leaderboard.json"
+MEDBENCH_FILE = _EVAL_DIR / "medbench.json"
+
+
+def get_medbench() -> dict[str, Any]:
+    """MedBench 官方榜单快照（API 榜单 + 自测榜单）。
+
+    与内部 eval 条目无关: 这份数据来自 MedBench 官方榜单, 不随评测导入变化,
+    直接编辑 eval/medbench.json 即可更新。
+    """
+    empty: dict[str, Any] = {"api": [], "self_test": [], "sub_benches": []}
+    if not MEDBENCH_FILE.exists():
+        return empty
+    try:
+        data = json.loads(MEDBENCH_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return empty
+    if not isinstance(data, dict):
+        return empty
+    for key, default in empty.items():
+        data.setdefault(key, default)
+    return data
 
 
 def _load() -> list[dict[str, Any]]:
@@ -156,17 +177,18 @@ def get_leaderboard() -> dict[str, Any]:
     """Return leaderboard entries grouped by category.
 
     Categories shown to users are: hard, full, general_follow,
-    general_knowledge, general_reasoning, general_subset.
-    The removed historical categories (s10 "Sampled 10%" and medqa_cn
-    "subset") are deliberately excluded from the response so the UI no longer
-    renders them; their stored entries remain in leaderboard.json. `total`
-    still reflects the full stored count.
+    general_knowledge, general_reasoning.
+    The removed categories (s10 "Sampled 10%", medqa_cn "subset" and
+    general_subset "通用子集") are deliberately excluded from the response so
+    the UI no longer renders them; their stored entries remain in
+    leaderboard.json and newly imported runs keep getting categorised the same
+    way, so dropping a category from the UI is reversible. `total` still
+    reflects the full stored count.
     """
     entries = _load()
     SHOWN = (
         "hard", "full",
         "general_follow", "general_knowledge", "general_reasoning",
-        "general_subset",
     )
     categories: dict[str, list[dict]] = {c: [] for c in SHOWN}
     for e in entries:
@@ -175,15 +197,15 @@ def get_leaderboard() -> dict[str, Any]:
             categories[cat].append(e)
     return {
         "categories": {
-            "hard": "Hard (test_hard)",
-            "full": "Test (test)",
+            "hard": "MedicalAgentsBench 高难子集 (test_hard)",
+            "full": "MedicalAgentsBench 全量测试集 (test)",
             "general_follow": "指令遵循 (IFEval/IFBench/Inverse IFEval)",
             "general_knowledge": "世界知识 (MMLU/GSM8K/C-Eval)",
             "general_reasoning": "推理能力 (GPQA Diamond/AIME 2026)",
-            "general_subset": "通用子集 (MMLU/GSM8K/C-Eval)",
         },
         "entries": categories,
         "total": len(entries),
+        "medbench": get_medbench(),
     }
 
 
@@ -317,10 +339,12 @@ def export_to_xlsx(
             ]
             bench_best[bid] = max(vals) if vals else None
 
-        base_title = sanitize_sheet(labels.get(cat, cat))
+        # 表名去掉 "(test_hard)" 这类 split 后缀, 免得撞上 Excel 的 31 字符上限被截断
+        short_label = labels.get(cat, cat).split(" (")[0]
+        base_title = sanitize_sheet(short_label)
         if max_model_len is not None:
             base_title = sanitize_sheet(
-                f"{labels.get(cat, cat)}-{(max_model_len / 1024):.0f}k"
+                f"{short_label}-{(max_model_len / 1024):.0f}k"
             )
         title = base_title
         n = 2

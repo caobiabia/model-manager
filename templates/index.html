@@ -760,6 +760,23 @@ svg.lucide{flex-shrink:0;stroke-width:2}
 .lb-search .ms-clear:hover{background:var(--panel-hover);color:var(--text)}
 .lb-search .ms-clear svg{width:12px;height:12px}
 .lb-filter-info{display:none;font-size:12px;color:var(--text-dim);margin:-6px 0 12px}
+/* 分榜 tab: 一排分榜名字, 点一个看一个, 不用一直往下滑 */
+.lb-cat-tabs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px}
+.lb-cat-tab{
+  display:inline-flex;align-items:center;gap:7px;padding:6px 14px;
+  border:1px solid var(--border);border-radius:999px;background:var(--panel);
+  color:var(--text-dim);font-size:12.5px;font-weight:500;font-family:var(--font);
+  cursor:pointer;transition:background var(--t-fast),color var(--t-fast),border-color var(--t-fast);
+}
+.lb-cat-tab:hover{background:var(--panel-hover);color:var(--text);border-color:var(--border-strong)}
+.lb-cat-tab.active{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+.lb-cat-tab .cnt{font-family:var(--font-mono);font-size:10.5px;font-weight:500;opacity:.7}
+.lb-cat-tab.active .cnt{opacity:.85}
+.lb-note{font-size:11.5px;color:var(--text-mute);margin:-4px 0 14px}
+.lb-sub-head{display:flex;align-items:baseline;gap:8px;font-size:12.5px;font-weight:600;margin:16px 0 8px}
+.lb-sub-meta{font-size:11px;font-weight:400;color:var(--text-mute)}
+.lb-table th.txt,.lb-table td.txt{text-align:left;font-family:var(--font)}
+.lb-table td.lb-top{color:var(--amber);font-weight:700}
 .import-list{max-height:400px;overflow-y:auto}
 .import-item{display:flex;align-items:center;gap:8px;padding:8px;border-bottom:1px solid var(--border)}
 .import-item .ii-name{flex:1;font-size:12px}
@@ -1005,6 +1022,7 @@ svg.lucide{flex-shrink:0;stroke-width:2}
           <button class="btn ghost" onclick="loadLeaderboard()"><i data-lucide="refresh-cw"></i>刷新</button>
         </div>
         <div id="lbFilterInfo" class="lb-filter-info"></div>
+        <div class="lb-cat-tabs" id="lbCatTabs"></div>
         <div id="lbContent"><div class="eval-empty"><i data-lucide="trophy"></i><div>尚无榜单数据</div></div></div>
       </div>
     </div>
@@ -1987,8 +2005,8 @@ async function loadEvalBenches(){
 function renderBenchGrid(){
   const grid=$('evalBenchGrid'); grid.innerHTML='';
   const groupDefs=[
-    {key:'med_hard',icon:'activity',name:'医疗 Bench · Hard',meta:'test_hard · 高难子集',collapsed:true},
-    {key:'med_full',icon:'layers',name:'医疗 Bench · 全量',meta:'test · 全量测试集',collapsed:true},
+    {key:'med_hard',icon:'activity',name:'MedicalAgentsBench 高难子集',meta:'test_hard split · 10 套医疗数据集',collapsed:true},
+    {key:'med_full',icon:'layers',name:'MedicalAgentsBench 全量测试集',meta:'test split · 10 套医疗数据集',collapsed:true},
     {key:'general_follow',icon:'list-checks',name:'指令遵循',meta:'IFEval / IFBench / Inverse IFEval',collapsed:true},
     {key:'general_knowledge',icon:'globe',name:'世界知识',meta:'MMLU / GSM8K / C-Eval',collapsed:true},
     {key:'general_reasoning',icon:'brain-circuit',name:'推理能力',meta:'GPQA Diamond / AIME 2026',collapsed:true},
@@ -2011,8 +2029,8 @@ function renderBenchGrid(){
   // quick presets
   const presets=[
     {key:'all',icon:'check-check',name:'全部'},
-    {key:'med_hard',icon:'activity',name:'医疗 Hard'},
-    {key:'med_full',icon:'layers',name:'医疗全量'},
+    {key:'med_hard',icon:'activity',name:'MedicalAgentsBench 高难'},
+    {key:'med_full',icon:'layers',name:'MedicalAgentsBench 全量'},
     {key:'general_follow',icon:'list-checks',name:'指令遵循'},
     {key:'general_knowledge',icon:'globe',name:'世界知识'},
     {key:'general_reasoning',icon:'brain-circuit',name:'推理能力'},
@@ -2746,6 +2764,7 @@ let lbData=null;
 let lbModelFilter='';
 let lbLenFilter=262144; // default: 256k leaderboard
 let lbAvgMode='simple';
+let lbTab='medbench'; // 当前分榜; MedBench 排第一并作为默认展示
 
 async function loadLeaderboard(){
   try{
@@ -2764,6 +2783,21 @@ function lbEffortTag(cfg){
   const v=cfg&&cfg.reasoning_effort;
   return (v==null||v==='')?'':' <span style="font-size:10px;color:var(--text-dim);font-weight:500" title="思考强度 reasoning_effort">强度 '+escapeHtml(String(v))+'</span>';
 }
+function lbNum(v){const n=Number(v);return Number.isFinite(n)?n:null}
+/* MedBench 官方分数不带百分号 */
+function lbScore(v){const n=lbNum(v);return n==null?'\u2014':n.toFixed(1)}
+function lbBestOf(rows,get){
+  const vals=rows.map(get).map(lbNum).filter(v=>v!=null);
+  return vals.length?Math.max(...vals):null;
+}
+function lbFiltered(items){
+  const kw=lbModelFilter;
+  if(!kw)return items;
+  return items.filter(e=>
+    (e.model_name&&String(e.model_name).toLowerCase().includes(kw))||
+    (e.model_key&&String(e.model_key).toLowerCase().includes(kw))
+  );
+}
 
 function setLbLen(v){
   lbLenFilter=v;
@@ -2773,97 +2807,176 @@ function setLbLen(v){
   renderLeaderboard();
 }
 
-function renderLeaderboard(){
-  const c=$('lbContent');
-  const cats=lbData.categories||{};
-  const entries=lbData.entries||{};
-  const kw=lbModelFilter;
-  let html='';
-  let hasData=false;
-  let shownModels=0;
+function setLbTab(key){
+  if(lbTab===key)return;
+  lbTab=key;
+  renderLeaderboard();
+}
+
+/* 分榜列表: MedBench 固定第一个（默认展示），其后是内部榜单分类 */
+function lbTabs(){
+  const cats=(lbData&&lbData.categories)||{};
+  const entries=(lbData&&lbData.entries)||{};
+  const mb=(lbData&&lbData.medbench)||{};
+  const tabs=[{key:'medbench',label:'MedBench',count:((mb.api||[]).length+(mb.self_test||[]).length)}];
   for(const[ck,label]of Object.entries(cats)){
     let items=entries[ck]||[];
-    if(lbLenFilter!==''){
-      items=items.filter(e=>lbLenValue(e)===lbLenFilter);
-    }
-    if(kw)items=items.filter(e=>
-      (e.model_name&&String(e.model_name).toLowerCase().includes(kw))||
-      (e.model_key&&String(e.model_key).toLowerCase().includes(kw))
-    );
-    if(!items.length)continue;
-    hasData=true;
-    const models=[...new Set(items.map(lbRowKey))];
-    shownModels+=models.length;
-    const benches=[...new Set(items.map(e=>e.bench_id+':'+e.bench_name))];
-    // per-row avg (模型+强度)
-    const avgOf=mk=>{
-      const es=items.filter(e=>lbRowKey(e)===mk&&Number.isFinite(e.accuracy));
-      if(!es.length)return null;
-      if(lbAvgMode==='weighted'){
-        let ws=0,wc=0;
-        es.forEach(e=>{
-          const w=(Number.isFinite(e.processed)&&e.processed>0)?e.processed:1;
-          ws+=e.accuracy*w;wc+=w;
-        });
-        return ws/wc;
-      }
-      return es.reduce((s,e)=>s+e.accuracy,0)/es.length;
-    };
-    const modelAvgs={};
-    models.forEach(mk=>{modelAvgs[mk]=avgOf(mk)});
-    models.sort((a,b)=>(modelAvgs[b]??-1)-(modelAvgs[a]??-1));
-    // per-bench best across ALL models (for bold highlighting)
-    const benchBest={};
-    benches.forEach(b=>{
-      const bid=b.split(':')[0];
-      const all=items.filter(e=>e.bench_id===bid).map(e=>e.accuracy).filter(a=>Number.isFinite(a));
-      benchBest[bid]=all.length?Math.max(...all):null;
-    });
-    html+='<div class="lb-section"><h3><i data-lucide="trophy"></i>'+escapeHtml(label)+' ('+models.length+' 模型, '+benches.length+' bench)</h3>';
-    html+='<div style="overflow-x:auto"><table class="lb-table"><thead><tr><th>模型</th><th title="'+(lbAvgMode==='weighted'?'加权平均（按题量）':'普通平均（各 bench 等权）')+'">Avg'+(lbAvgMode==='weighted'?'*':'')+'</th>';
-    benches.forEach(b=>{
-      const[name,id]=b.split(':');
-      html+='<th title="'+escapeHtml(id)+'">'+escapeHtml(name)+'</th>';
-    });
-    html+='<th></th></tr></thead><tbody>';
-    models.forEach(mk=>{
-      const mc=items.find(e=>lbRowKey(e)===mk);
-      const modelLabel=mc?mc.model_name:mk.split('|')[0];
-      html+='<tr><td>'+escapeHtml(modelLabel)+lbEffortTag(mc)+'</td>';
-      html+='<td><b>'+(modelAvgs[mk]==null?'\u2014':modelAvgs[mk].toFixed(1)+'%')+'</b></td>';
-      benches.forEach(b=>{
-        const bid=b.split(':')[0];
-        const e=items.find(x=>lbRowKey(x)===mk&&x.bench_id===bid);
-        if(e){
-          const acc=Number.isFinite(e.accuracy)?e.accuracy:null;
-          const isBest=acc!=null&&acc===benchBest[bid]&&acc>0;
-          html+='<td'+(isBest?' class="best"':'')+'>'+(acc==null?'\u2014':acc.toFixed(1)+'%')+'</td>';
-        }else{
-          html+='<td>-</td>';
-        }
-      });
-      html+='<td><button class="btn btn-xs danger" onclick="deleteLbEntries(\''+ck+'\',\''+escapeHtml((mc&&mc.model_key)||mk.split('|')[0])+'\',\''+lbLenFilter+'\',\''+escapeHtml(String((mc&&mc.reasoning_effort!=null)?mc.reasoning_effort:''))+'\')"><i data-lucide="trash-2"></i></button></td>';
-      html+='</tr>';
-    });
-    html+='</tbody></table></div></div>';
+    if(lbLenFilter!=='')items=items.filter(e=>lbLenValue(e)===lbLenFilter);
+    items=lbFiltered(items);
+    tabs.push({key:ck,label,count:new Set(items.map(lbRowKey)).size});
   }
-  if(!hasData){
-    c.innerHTML=kw
-      ? '<div class="eval-empty"><i data-lucide="search-x"></i><div>没有匹配“'+escapeHtml(kw)+'”的模型</div></div>'
-      : '<div class="eval-empty"><i data-lucide="trophy"></i><div>尚无榜单数据，点“导入历史记录”</div></div>';
-  }else{
-    c.innerHTML=html;
+  return tabs;
+}
+
+function renderLeaderboard(){
+  const c=$('lbContent');
+  if(!c)return;
+  const tabs=lbTabs();
+  if(!tabs.some(t=>t.key===lbTab))lbTab=tabs.length?tabs[0].key:'medbench';
+  const tabBox=$('lbCatTabs');
+  if(tabBox){
+    tabBox.innerHTML=tabs.map(t=>
+      '<button class="lb-cat-tab'+(t.key===lbTab?' active':'')+'" onclick="setLbTab(\''+t.key+'\')">'+
+      escapeHtml(t.label)+'<span class="cnt">'+t.count+'</span></button>'
+    ).join('');
   }
+  const isMed=lbTab==='medbench';
+  // Avg 方式与上下文长度只对内部榜单有意义; MedBench 用官方综合得分
+  const avgBox=document.querySelector('.lb-avg-mode');if(avgBox)avgBox.style.display=isMed?'none':'';
+  const lenBox=document.querySelector('.lb-len-tabs');if(lenBox)lenBox.style.display=isMed?'none':'';
+  c.innerHTML=isMed
+    ? renderMedbenchPanel()
+    : renderCategoryPanel(lbTab,(lbData.categories||{})[lbTab]||lbTab);
   const info=$('lbFilterInfo');
   if(info){
-    if(kw){
+    if(lbModelFilter){
       info.style.display='block';
-      info.textContent='筛选“'+kw+'”：共 '+shownModels+' 个匹配模型';
+      info.textContent='筛选“'+lbModelFilter+'”：当前分榜 '+c.querySelectorAll('tbody tr').length+' 行';
     }else{
       info.style.display='none';
     }
   }
   if(window.lucide)lucide.createIcons();
+}
+
+/* 内部榜单的一个分榜: 模型 × bench 成绩表 */
+function renderCategoryPanel(ck,label){
+  let items=(lbData.entries||{})[ck]||[];
+  if(lbLenFilter!=='')items=items.filter(e=>lbLenValue(e)===lbLenFilter);
+  items=lbFiltered(items);
+  if(!items.length){
+    return lbModelFilter
+      ? '<div class="eval-empty"><i data-lucide="search-x"></i><div>本分榜没有匹配“'+escapeHtml(lbModelFilter)+'”的模型</div></div>'
+      : '<div class="eval-empty"><i data-lucide="trophy"></i><div>本分榜在当前长度筛选下暂无数据</div></div>';
+  }
+  const models=[...new Set(items.map(lbRowKey))];
+  const benches=[...new Set(items.map(e=>e.bench_id+':'+e.bench_name))];
+  // per-row avg (模型+强度)
+  const avgOf=mk=>{
+    const es=items.filter(e=>lbRowKey(e)===mk&&Number.isFinite(e.accuracy));
+    if(!es.length)return null;
+    if(lbAvgMode==='weighted'){
+      let ws=0,wc=0;
+      es.forEach(e=>{
+        const w=(Number.isFinite(e.processed)&&e.processed>0)?e.processed:1;
+        ws+=e.accuracy*w;wc+=w;
+      });
+      return ws/wc;
+    }
+    return es.reduce((s,e)=>s+e.accuracy,0)/es.length;
+  };
+  const modelAvgs={};
+  models.forEach(mk=>{modelAvgs[mk]=avgOf(mk)});
+  models.sort((a,b)=>(modelAvgs[b]??-1)-(modelAvgs[a]??-1));
+  // per-bench best across ALL models (for bold highlighting)
+  const benchBest={};
+  benches.forEach(b=>{
+    const bid=b.split(':')[0];
+    const all=items.filter(e=>e.bench_id===bid).map(e=>e.accuracy).filter(a=>Number.isFinite(a));
+    benchBest[bid]=all.length?Math.max(...all):null;
+  });
+  let html='<div class="lb-section"><h3><i data-lucide="trophy"></i>'+escapeHtml(label)+' ('+models.length+' 模型, '+benches.length+' bench)</h3>';
+  html+='<div style="overflow-x:auto"><table class="lb-table"><thead><tr><th>模型</th><th title="'+(lbAvgMode==='weighted'?'加权平均（按题量）':'普通平均（各 bench 等权）')+'">Avg'+(lbAvgMode==='weighted'?'*':'')+'</th>';
+  benches.forEach(b=>{
+    const[name,id]=b.split(':');
+    html+='<th title="'+escapeHtml(id)+'">'+escapeHtml(name)+'</th>';
+  });
+  html+='<th></th></tr></thead><tbody>';
+  models.forEach(mk=>{
+    const mc=items.find(e=>lbRowKey(e)===mk);
+    const modelLabel=mc?mc.model_name:mk.split('|')[0];
+    html+='<tr><td>'+escapeHtml(modelLabel)+lbEffortTag(mc)+'</td>';
+    html+='<td><b>'+(modelAvgs[mk]==null?'\u2014':modelAvgs[mk].toFixed(1)+'%')+'</b></td>';
+    benches.forEach(b=>{
+      const bid=b.split(':')[0];
+      const e=items.find(x=>lbRowKey(x)===mk&&x.bench_id===bid);
+      if(e){
+        const acc=Number.isFinite(e.accuracy)?e.accuracy:null;
+        const isBest=acc!=null&&acc===benchBest[bid]&&acc>0;
+        html+='<td'+(isBest?' class="best"':'')+'>'+(acc==null?'\u2014':acc.toFixed(1)+'%')+'</td>';
+      }else{
+        html+='<td>-</td>';
+      }
+    });
+    html+='<td><button class="btn btn-xs danger" onclick="deleteLbEntries(\''+ck+'\',\''+escapeHtml((mc&&mc.model_key)||mk.split('|')[0])+'\',\''+lbLenFilter+'\',\''+escapeHtml(String((mc&&mc.reasoning_effort!=null)?mc.reasoning_effort:''))+'\')"><i data-lucide="trash-2"></i></button></td>';
+    html+='</tr>';
+  });
+  html+='</tbody></table></div></div>';
+  return html;
+}
+
+/* MedBench 分榜: 官方 API 榜单 + 自测榜单（数据在 eval/medbench.json，人工维护） */
+function renderMedbenchPanel(){
+  const mb=(lbData&&lbData.medbench)||{};
+  const subs=mb.sub_benches||[];
+  const kw=lbModelFilter;
+  const hit=r=>!kw||String(r.model_name||'').toLowerCase().includes(kw);
+  const byScore=rows=>rows.slice().sort((a,b)=>(lbNum(b.overall)||0)-(lbNum(a.overall)||0));
+  const api=byScore((mb.api||[]).filter(hit));
+  const st=byScore((mb.self_test||[]).filter(hit));
+  if(!api.length&&!st.length){
+    return kw
+      ? '<div class="eval-empty"><i data-lucide="search-x"></i><div>没有匹配“'+escapeHtml(kw)+'”的模型</div></div>'
+      : '<div class="eval-empty"><i data-lucide="stethoscope"></i><div>尚无 MedBench 数据，编辑 eval/medbench.json 维护</div></div>';
+  }
+  const panel=(head,meta,rows)=>
+    '<div class="lb-sub-head">'+head+'<span class="lb-sub-meta">'+meta+'</span></div>'
+    +(rows.length?renderMedbenchTable(rows,subs):'<div class="lb-note">当前筛选下没有匹配的模型</div>');
+  let html='<div class="lb-section"><h3><i data-lucide="stethoscope"></i>MedBench 榜单</h3>';
+  html+='<div class="lb-note">'+escapeHtml(mb.source_note||'MedBench 官方榜单')
+    +(mb.updated?' · 快照更新于 '+escapeHtml(mb.updated):'')+'</div>';
+  html+=panel('API 榜单',api.length+' 个模型 · 官方 API 评测',api);
+  html+=panel('自测榜单',st.length+' 个模型 · 提交至 MedBench 自测',st);
+  html+='</div>';
+  return html;
+}
+
+/* 两张 MedBench 表同列: 排名 / 模型 / 综合得分 / 五个子任务分, 按综合得分排名 */
+function renderMedbenchTable(rows,subs){
+  const subHead=subs.map(s=>'<th title="'+escapeHtml(s)+'">'+escapeHtml(s)+'</th>').join('');
+  const bestOv=lbBestOf(rows,r=>r.overall);
+  const bestSub=subs.map((_,i)=>lbBestOf(rows,r=>(r.scores||[])[i]));
+  // 综合得分相同的并列同名次 (1, 1, 3 …), 不按文件顺序硬分先后
+  const rankOf=r=>{
+    const v=lbNum(r.overall);
+    if(v==null)return null;
+    return 1+rows.filter(x=>{const o=lbNum(x.overall);return o!=null&&o>v}).length;
+  };
+  let html='<div style="overflow-x:auto"><table class="lb-table"><thead><tr><th>排名</th><th class="txt">模型</th><th title="综合得分（5 项子任务平均）">综合得分</th>'+subHead+'</tr></thead><tbody>';
+  rows.forEach(r=>{
+    const ov=lbNum(r.overall);
+    const rank=rankOf(r);
+    html+='<tr><td'+(rank===1?' class="lb-top"':'')+'>'+(rank==null?'\u2014':rank)+'</td>';
+    html+='<td class="txt"><b>'+escapeHtml(r.model_name||'-')+'</b></td>';
+    html+='<td'+(ov!=null&&ov===bestOv?' class="best"':'')+'><b>'+lbScore(r.overall)+'</b></td>';
+    subs.forEach((s,i)=>{
+      const n=lbNum((r.scores||[])[i]);
+      html+='<td'+(n!=null&&n===bestSub[i]?' class="best"':'')+'>'+lbScore((r.scores||[])[i])+'</td>';
+    });
+    html+='</tr>';
+  });
+  html+='</tbody></table></div>';
+  return html;
 }
 
 function onLbFilter(v){

@@ -172,3 +172,50 @@ python app.py
 ### 使用
 
 浏览器打开后切换到「测评」标签，选择模型和 bench，点击开始即可。进度实时推送，结果自动保存到 `eval/output/<run_id>/`。
+
+### 错题提取与分析
+
+`eval/wrong_answers.py` 从已完成的 run 里导出逐题错题并出统计，不重新调用模型：
+
+```bash
+# 单模型：导出全部错题 JSONL + 分数据集统计 + REPORT.md
+python eval/wrong_answers.py extract --run-id 20260910_003815 \
+    --model-key qwen36_35b_sft_med_v72_ep3 --out eval/analysis/v72ep3
+
+# 两模型对比：共错/单边错题、Jaccard、逐 bench 交叉表
+python eval/wrong_answers.py compare --a eval/analysis/v72ep3 \
+    --b eval/analysis/qwen38flash --out eval/analysis/compare
+```
+
+默认覆盖 MedicalAgentsBench 10 套数据的高难子集（`<ds>`）与全量测试集（`<ds>_full`），
+可用 `--benches` 指定其它 bench。输出含题目/选项/gold/模型答案/完整 `raw_response`/reasoning，
+以及错误类型（未作答 vs 误选）、选项分布、生成长度等统计。`compare` 额外产出
+`right_b_wrong_a.jsonl` / `right_a_wrong_b.jsonl`——单边错题的富记录（题干、选项、gold、
+双方答案字母与完整回答），可直接拿去做差距分析。`eval/analysis/` 为分析产物目录（已 gitignore）。
+
+### 榜单
+
+「榜单」标签顶部是一排分榜名字，点哪个看哪个（不再把全部分榜竖着堆在一页）：
+
+| 分榜 | 来源 |
+| --- | --- |
+| MedBench | 官方榜单快照，人工维护在 `eval/medbench.json` |
+| MedicalAgentsBench 高难子集 (test_hard) / 全量测试集 (test) | 内部测评导入的成绩：10 套 MedicalAgentsBench 数据集的高难子集与完整测试集 |
+| 指令遵循 / 世界知识 / 推理能力 | 内部测评导入的通用 Bench 成绩 |
+
+MedBench 分榜含两张表：**API 榜单**（官方 API 评测）与**自测榜单**（提交到 MedBench
+自测），两张表列结构相同——排名 / 模型 / 综合得分 + 医学知识问答 / 医学语言生成 /
+复杂医学推理 / 医学语言理解 / 医疗安全和伦理，均按综合得分降序排名。这些分数
+**不来自本仓库的测评流程**，而是官方站点的快照，直接编辑 `eval/medbench.json`
+（`api` / `self_test` / `sub_benches` 三段）即可更新，保存后刷新页面生效，无需重启服务；
+`self_test` 里官网附带的提交日期、组织、参数量等字段仍保留在 JSON 中，只是不在表里展示。
+表里的模型名统一用内部 checkpoint 正式名（即 `model_config.py` 的 `display_name`），
+例如 MedBench 站上的 `Med-v7.2` 在本仓库写作
+`Qwen3.6-35B-A3B (full-sft-medbench-instruct-v7.2-epoch3)`，这样同一模型在不同分榜里
+读到的名字一致；非本团队的模型（百度灵医智惠、qiaojian-med 等）按官方叫法保留。
+
+内部榜单条目来自「导入历史记录」（把已完成 run 的成绩写进 `eval/leaderboard.json`），
+用顶部「长度」切换 256k / 16k 两个上下文长度榜；MedBench 分榜不参与该筛选。
+已下架的历史分榜（`general_subset` 通用子集、`s10` 采样 10%、`medqa_cn` 自定义子集）
+不再出现在榜单里，但条目仍保留在 `eval/leaderboard.json`，需要时把分类加回
+`eval/leaderboard.py` 的 `get_leaderboard()` 即可恢复。
