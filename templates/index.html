@@ -2467,7 +2467,11 @@ function renderEvalProgress(runId){
     const accTxt=(p.accuracy==null||isNaN(p.accuracy))?'\u2014':p.accuracy.toFixed(1)+'%';
     const modelLabel=evalModelNames[p.model_key||p.model]||p.model||'-';
     const benchLabel=p.bench_name||benchNameOf(p.bench_id||p.bench)||p.bench_id||p.bench||'-';
-    const statusBadge=p.status==='done'?'<span class="status-pill completed" style="font-size:9px">done</span>':p.status==='skipped'?'<span class="status-pill interrupted" style="font-size:9px">skip</span>':'';
+    const left=Math.max(0,(p.total||0)-(p.done||0));
+    const statusBadge=p.status==='done'?'<span class="status-pill completed" style="font-size:9px">done</span>'
+      :p.status==='skipped'?'<span class="status-pill interrupted" style="font-size:9px">skip</span>'
+      :(p.status==='interrupted'||p.status==='aborted')?'<span class="status-pill interrupted" style="font-size:9px" title="'+escapeHtml(p.error||'')+'">'+(left>0?('未跑 '+left+' 题'):'中断')+'</span>'
+      :'';
     return '<tr><td class="model-cell">'+escapeHtml(modelLabel)+'</td>'+
       '<td class="bench-cell">'+escapeHtml(benchLabel)+(p.reason?'<br><span style="font-size:10px;color:var(--text-mute)">'+escapeHtml(p.reason)+'</span>':'')+'</td>'+
       '<td style="min-width:160px"><div style="display:flex;align-items:center;gap:6px"><span style="font-size:11px;font-family:var(--font-mono)">'+p.done+'/'+(p.total||'?')+'</span><div class="progress-bar"><div class="progress-fill'+(p.status==='done'?' green':'')+'" style="width:'+pct+'%"></div></div></div></td>'+
@@ -2523,10 +2527,15 @@ function handleEvalEvent(runId,ev){
   }else if(ev.type==='pair_done'){
     const key=ev.model_key+'|'+ev.bench_id;
     if(run.progressData[key]){
+      const inc=ev.aborted||(ev.stopped&&ev.processed<ev.total);
       Object.assign(run.progressData[key],{
-        done:Math.max(ev.processed||0,run.progressData[key].done||0),
+        // An aborted/stopped pair reports what was actually scored; keeping
+        // the higher live counter would show "10000/10000" for a bench that
+        // only answered half its questions.
+        done:inc?(ev.processed||0):Math.max(ev.processed||0,run.progressData[key].done||0),
         correct:ev.correct,accuracy:ev.accuracy,
         bench_name:ev.bench_name||run.progressData[key].bench_name,
+        error:ev.error||'',
         status:ev.aborted?'aborted':(ev.stopped&&run.progressData[key].total>0&&ev.processed<run.progressData[key].total?'interrupted':'done')
       });
     }
@@ -3024,7 +3033,14 @@ async function importRun(runId){
     const r=await fetch('/api/eval/leaderboard/import/'+runId,{method:'POST'});
     const d=await r.json();
     if(d.ok){
-      alert('导入成功: +'+d.imported+' 新, 替换 '+d.replaced+' 条');
+      let msg='导入成功: +'+d.imported+' 新, 替换 '+d.replaced+' 条';
+      const sk=d.skipped||[];
+      if(sk.length){
+        msg+='\n\n跳过 '+sk.length+' 条未跑完的记录（准确率会失真，先"继续运行"跑完再导入）：\n';
+        msg+=sk.slice(0,6).map(s=>'  • '+(s.model_key||'')+' / '+(s.bench_id||'')+'：还差 '+s.unattempted+' 题').join('\n');
+        if(sk.length>6)msg+='\n  …等 '+sk.length+' 条';
+      }
+      alert(msg);
       loadLeaderboard();
       // close modal
       const m=$('evalModal');if(m)m.style.display='none';

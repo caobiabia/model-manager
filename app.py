@@ -16,9 +16,10 @@ import subprocess
 import sys
 import threading
 import time
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
-from queue import Empty, Queue
+from queue import Empty, Full, Queue
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
@@ -98,12 +99,107 @@ def _save_user_models(data: dict[str, dict]) -> None:
 app = FastAPI(title="Model Console")
 app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
 
+# Diagnosis hook: `kill -USR1 <worker-pid>` dumps every thread's Python stack
+# into server.log. This process shares its GIL with the in-process eval
+# runner, so when the UI goes unresponsive this is the only way to see which
+# frame is blocking the event loop (ptrace tools like py-spy need root here).
+try:
+    import faulthandler
+
+    faulthandler.register(signal.SIGUSR1, all_threads=True, chain=False)
+except Exception:  # pragma: no cover - diagnostic only
+    pass
+
+# Shorter GIL switch interval: with a big eval running in this process
+# (hundreds of worker threads) the default 5ms quantum lets runner threads
+# hold the GIL in long stretches, which showed up as multi-second latencies
+# on every HTTP endpoint.
+sys.setswitchinterval(0.001)
+
 _procs: dict[str, subprocess.Popen] = {}
 _log_queues: dict[str, Queue] = {}
 _start_times: dict[str, str] = {}
 _log_history: dict[str, list[str]] = {}  # accumulated log lines
 _locks: dict[str, asyncio.Lock] = {}     # per-model lock for launch / stop
-_thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=8)
+# Shared worker pool for *short* blocking probes (port/vLLM/GPU checks,
+# launch/stop helpers). Long-lived waiters must never park here: the SSE
+# log/eval streams used to hold a worker for ~1s per poll and starved the
+# pool for everything else.
+_thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=16)
+# SSE streams poll their queue at this interval (non-blocking); it is the
+# delivery latency of log lines / eval events, not a resource cost.
+SSE_POLL_INTERVAL = 0.05
+
+
+class StreamHub:
+    """Fan out one producer queue to every SSE client.
+
+    The eval runner (and each vLLM log reader) pushes into a single queue.
+    Each browser tab used to read that queue directly, so tabs *competed* for
+    events: every event went to exactly one tab, and with several tabs open a
+    given tab saw only a random slice of the progress -- the visible tab could
+    sit at 0/total while the run was progressing fine. One pump thread now
+    reads the source and copies each item into a per-connection queue, keeping
+    a bounded replay buffer so a freshly opened tab starts with recent history
+    instead of an empty view.
+    """
+
+    def __init__(self, source: Queue, replay: int = 400):
+        self._source = source
+        self._replay: deque = deque(maxlen=replay)
+        self._subs: set[Queue] = set()
+        self._finished = False
+        self._lock = threading.Lock()
+        self._thread: threading.Thread | None = None
+
+    def subscribe(self) -> Queue:
+        q: Queue = Queue(maxsize=4000)
+        with self._lock:
+            for item in self._replay:
+                try:
+                    q.put_nowait(item)
+                except Full:
+                    break
+            if self._finished:
+                # Never leave a late subscriber hanging: hand it the EOF
+                # sentinel immediately.
+                try:
+                    q.put_nowait(None)
+                except Full:
+                    pass
+                return q
+            self._subs.add(q)
+            if self._thread is None:
+                self._thread = threading.Thread(
+                    target=self._pump, daemon=True, name="sse-hub",
+                )
+                self._thread.start()
+        return q
+
+    def unsubscribe(self, q: Queue) -> None:
+        with self._lock:
+            self._subs.discard(q)
+
+    def _pump(self) -> None:
+        while True:
+            item = self._source.get()  # blocking; the hub's own thread
+            with self._lock:
+                self._replay.append(item)
+                if item is None:  # EOF sentinel of both streams
+                    self._finished = True
+                subs = list(self._subs)
+                if self._finished:
+                    self._subs.clear()
+            for sub in subs:
+                try:
+                    sub.put_nowait(item)
+                except Full:
+                    pass
+            if self._finished:
+                return
+
+
+_log_hubs: dict[str, StreamHub] = {}
 _desc_lock = threading.Lock()
 _GPU_CACHE_TTL = 3.0  # seconds; /api/gpus is polled every 2s from the frontend
 _gpu_cache: tuple[float, list[dict[str, Any]]] | None = None
@@ -139,20 +235,38 @@ def _probe_vllm(port: int) -> list[str]:
     return []
 
 
+_probe_cache: dict[str, tuple[float, list[str]]] = {}
+_probe_cache_lock = threading.Lock()
+_PROBE_CACHE_TTL = 30.0  # seconds
+
+
 def _probe_base_url(base_url: str) -> list[str]:
     """Return model IDs on a (possibly remote) OpenAI-compatible endpoint.
 
     Entries carrying an explicit base_url are served on another host, so
-    localhost port scanning never sees them alive; probe /v1/models instead."""
+    localhost port scanning never sees them alive; probe /v1/models instead.
+
+    Cached for _PROBE_CACHE_TTL: a dead remote endpoint costs a 3s read
+    timeout, and the frontend polls /api/models from every open tab -- that
+    3s used to be paid on every call, occupying a shared pool worker each
+    time (which is what made the model dropdown hang)."""
+    now = time.time()
+    with _probe_cache_lock:
+        hit = _probe_cache.get(base_url)
+        if hit is not None and now - hit[0] < _PROBE_CACHE_TTL:
+            return hit[1]
+    found: list[str] = []
     try:
         import httpx  # noqa: PLC0415
         with httpx.Client(timeout=3) as c:
             r = c.get(f"{base_url.rstrip('/')}/models")
             if r.status_code == 200:
-                return [m["id"] for m in r.json().get("data", [])]
+                found = [m["id"] for m in r.json().get("data", [])]
     except Exception:
         pass
-    return []
+    with _probe_cache_lock:
+        _probe_cache[base_url] = (now, found)
+    return found
 
 
 def scan_all_ports() -> dict[str, dict]:
@@ -475,18 +589,28 @@ async def list_models() -> list[dict[str, Any]]:
 
     port_alive: dict[str, bool] = {}
     probe_futures: dict[str, list[str]] = {}
-    for key, cfg in _cfg().MODELS.items():
+
+    async def _probe_one(key: str, cfg: dict) -> tuple[str, bool, list[str]]:
         if cfg.get("base_url"):
             found = await _probe_remote(cfg["base_url"])
-            port_alive[key] = bool(found)
-            if found:
-                probe_futures[key] = found
-            continue
+            return key, bool(found), found
         p = cfg.get("port")
-        if p:
-            port_alive[key] = await _check_port(p)
-            if port_alive[key]:
-                probe_futures[key] = await _probe(p)
+        if not p:
+            return key, False, []
+        if not await _check_port(p):
+            return key, False, []
+        return key, True, await _probe(p)
+
+    # Probe every configured model concurrently: the loop used to await each
+    # model in turn, so one dead remote endpoint (3s timeout) delayed the
+    # whole list.
+    results = await asyncio.gather(
+        *(_probe_one(k, c) for k, c in _cfg().MODELS.items()),
+    )
+    for key, alive, found in results:
+        port_alive[key] = alive
+        if found:
+            probe_futures[key] = found
 
     descriptions = _load_descriptions()
     result: list[dict[str, Any]] = []
@@ -669,6 +793,9 @@ async def launch_model(model_key: str, body: LaunchRequest = LaunchRequest()):
         _start_times[model_key] = datetime.now(timezone.utc).isoformat()
         q: Queue[Any] = Queue()
         _log_queues[model_key] = q
+        # A relaunch gets a fresh queue: drop the hub bound to the old one,
+        # otherwise SSE clients would keep reading the dead queue.
+        _log_hubs.pop(model_key, None)
         threading.Thread(
             target=_reader, args=(model_key, proc.stdout, q), daemon=True,
         ).start()
@@ -693,6 +820,7 @@ async def stop_model(model_key: str):
     async with lock:
         proc = _procs.pop(model_key, None)
         _log_queues.pop(model_key, None)
+        _log_hubs.pop(model_key, None)
         _start_times.pop(model_key, None)
         _log_history.pop(model_key, None)
 
@@ -839,28 +967,36 @@ async def get_log_history(model_key: str):
 
 @app.get("/api/log/{model_key}")
 async def stream_log(model_key: str, request: Request):
-    q = _log_queues.get(model_key)
-    if q is None:
+    src = _log_queues.get(model_key)
+    if src is None:
         raise HTTPException(404, "No log stream")
+    hub = _log_hubs.get(model_key)
+    if hub is None or hub._source is not src:
+        hub = StreamHub(src)
+        _log_hubs[model_key] = hub
+    q = hub.subscribe()
 
     async def gen():
-        loop = asyncio.get_running_loop()
-        while True:
-            if await request.is_disconnected():
-                break
-            try:
-                # Poll with 1 s timeout so we can detect client disconnect
-                line = await loop.run_in_executor(
-                    _thread_pool, lambda: q.get(timeout=1),
-                )
-            except Empty:
-                continue
-            except Exception:
-                break
-            if line is None:
-                yield "data: [EOF]\n\n"
-                break
-            yield f"data: {json.dumps({'text': line})}\n\n"
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    # Non-blocking: each connection has its own queue, and
+                    # blocking here (old code: run_in_executor(q.get) with a
+                    # 1s timeout) parked a shared pool worker per poll.
+                    line = q.get_nowait()
+                except Empty:
+                    await asyncio.sleep(SSE_POLL_INTERVAL)
+                    continue
+                except Exception:
+                    break
+                if line is None:
+                    yield "data: [EOF]\n\n"
+                    break
+                yield f"data: {json.dumps({'text': line})}\n\n"
+        finally:
+            hub.unsubscribe(q)
 
     return StreamingResponse(gen(), media_type="text/event-stream")
 
@@ -1101,6 +1237,10 @@ async def _stream(base_url: str, api_key: str, model: str,
 # workspace-level eval/ symlink (which points to the old eval code).
 sys.path.insert(0, str(APP_DIR))
 from eval import list_benches as _eval_list_benches  # noqa: E402
+from eval.common import (  # noqa: E402
+    count_jsonl_cached,
+    result_stats_cached,
+)
 from eval.runner import EvalRunner, create_run_id, list_runs as _eval_list_runs  # noqa: E402
 from eval import leaderboard as _eval_lb  # noqa: E402
 
@@ -1188,9 +1328,10 @@ async def eval_start_run(req: EvalRunRequest) -> dict[str, Any]:
             # the true end state from the runner itself: a user stop sets
             # stopped without the stop endpoint ever touching _eval_runs,
             # which previously let a stopped run be mis-labeled "completed"
-            # in memory and then surface that way in the UI. (An unreachable
-            # model no longer aborts the run: its failing questions are
-            # circuit-broken and scored 0, so the run completes.)
+            # in memory and then surface that way in the UI. (A bench that
+            # keeps failing circuit-breaks on its own -- its unanswered
+            # questions stay unscored so a resume retries them -- and does
+            # not abort the rest of the run.)
             if _eval_runs[run_id]["status"] == "running":
                 if runner.stopped:
                     _eval_runs[run_id]["status"] = "stopped"
@@ -1214,28 +1355,35 @@ async def eval_stream(run_id: str, request: Request):
     if entry is None:
         raise HTTPException(404, f"Unknown run: {run_id}")
     runner: EvalRunner = entry["runner"]
-    q = runner.queue
+    hub = entry.get("hub")
+    if hub is None or hub._source is not runner.queue:
+        hub = StreamHub(runner.queue)
+        entry["hub"] = hub
+    q = hub.subscribe()
 
     async def gen():
-        loop = asyncio.get_running_loop()
-        while True:
-            if await request.is_disconnected():
-                break
-            try:
-                event = await loop.run_in_executor(
-                    _thread_pool, lambda: q.get(timeout=1),
-                )
-            except Empty:
-                if entry["status"] != "running":
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    # Non-blocking, and per-connection: every open tab now
+                    # sees every event instead of competing for one queue.
+                    event = q.get_nowait()
+                except Empty:
+                    if entry["status"] != "running":
+                        yield "data: [EOF]\n\n"
+                        break
+                    await asyncio.sleep(SSE_POLL_INTERVAL)
+                    continue
+                except Exception:
+                    break
+                if event is None:
                     yield "data: [EOF]\n\n"
                     break
-                continue
-            except Exception:
-                break
-            if event is None:
-                yield "data: [EOF]\n\n"
-                break
-            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        finally:
+            hub.unsubscribe(q)
 
     return StreamingResponse(gen(), media_type="text/event-stream")
 
@@ -1249,7 +1397,10 @@ async def eval_stop_run(run_id: str):
     runner: EvalRunner = entry["runner"]
     runner.stop()
     entry["status"] = "stopped"
-    return {"ok": True, "message": "Stop signal sent"}
+    return {
+        "ok": True,
+        "message": "Stop signal sent; in-flight generations aborted",
+    }
 
 
 def _progress_from_disk(run_id: str) -> dict | None:
@@ -1266,7 +1417,6 @@ def _progress_from_disk(run_id: str) -> dict | None:
     mode = config.get("mode", "cot")
 
     from eval.benches import get_bench
-    from eval.common import load_jsonl
 
     progress = {}
     for mk in model_keys:
@@ -1277,37 +1427,23 @@ def _progress_from_disk(run_id: str) -> dict | None:
             bench_name = bench.name if bench else bid
             total = 0
             if bench and Path(bench.data_file).exists():
-                total = len(load_jsonl(bench.data_file))
+                # Cached line count: parsing a 60MB JSONL just to know how
+                # many questions it holds stalled the event loop on every
+                # history/progress refresh.
+                total = count_jsonl_cached(bench.data_file)
 
-            # Count completed questions from the results file
+            # Count completed questions from the results file (cheaply)
             results_file = output_dir / f"{model_short}__{bid}__{mode}.json"
             done = 0
-            correct = 0
+            correct = None
             if results_file.exists():
-                try:
-                    results = json.loads(results_file.read_text(encoding="utf-8"))
-                    # deduplicate by realidx
-                    seen_ids = set()
-                    unique = []
-                    for r in results:
-                        rid = r.get("realidx")
-                        if rid not in seen_ids:
-                            seen_ids.add(rid)
-                            unique.append(r)
-                    done = len(unique)
-                    correct = sum(1 for r in unique if r.get("correct") is True)
-                except (json.JSONDecodeError, Exception):
-                    # results file may be corrupted (interrupted write)
-                    # fall back to counting progress file entries
-                    import re
-                    pf = output_dir / f"progress_{model_short}_{bid}_{mode}.txt"
-                    if pf.exists():
-                        done = len(set(int(x) for x in pf.read_text().split() if x.isdigit()))
-                    else:
-                        done = 0
-                    correct = 0
+                done, correct = result_stats_cached(results_file)
 
             if bench is not None and not bench.scorable:
+                acc = None
+            elif correct is None:
+                # Could not be counted without parsing a huge file: show
+                # "—" instead of a wrong number.
                 acc = None
             else:
                 acc = round(correct / done * 100, 1) if done > 0 else 0
@@ -1389,9 +1525,10 @@ async def eval_resume_run(run_id: str):
             # the true end state from the runner itself: a user stop sets
             # stopped without the stop endpoint ever touching _eval_runs,
             # which previously let a stopped run be mis-labeled "completed"
-            # in memory and then surface that way in the UI. (An unreachable
-            # model no longer aborts the run: its failing questions are
-            # circuit-broken and scored 0, so the run completes.)
+            # in memory and then surface that way in the UI. (A bench that
+            # keeps failing circuit-breaks on its own -- its unanswered
+            # questions stay unscored so a resume retries them -- and does
+            # not abort the rest of the run.)
             if _eval_runs[run_id]["status"] == "running":
                 if runner.stopped:
                     _eval_runs[run_id]["status"] = "stopped"
@@ -1407,10 +1544,36 @@ async def eval_resume_run(run_id: str):
     return {"ok": True, "run_id": run_id}
 
 
+_runs_scan_cache: tuple[float, list[dict[str, Any]]] | None = None
+_runs_scan_lock = threading.Lock()
+_RUNS_SCAN_TTL = 5.0  # seconds
+
+
+def _eval_list_runs_cached() -> list[dict[str, Any]]:
+    """Disk scan of eval runs, cached for _RUNS_SCAN_TTL.
+
+    Reading + parsing every summary.json is synchronous disk work on the
+    event loop; the frontend polls the run list from every open tab every
+    5s, so without the cache a big history (the 84-pair summary alone is
+    ~60KB) was re-read constantly and delayed unrelated endpoints.
+    """
+    global _runs_scan_cache
+    now = time.time()
+    with _runs_scan_lock:
+        if _runs_scan_cache is not None and now - _runs_scan_cache[0] < _RUNS_SCAN_TTL:
+            return _runs_scan_cache[1]
+    runs = _eval_list_runs()
+    with _runs_scan_lock:
+        _runs_scan_cache = (now, runs)
+    return runs
+
+
 @app.get("/api/eval/runs")
 async def eval_list_runs() -> list[dict[str, Any]]:
     """List all eval runs (from disk + in-memory)."""
-    disk_runs = _eval_list_runs()
+    # Shallow copies: the caller mutates per-run dicts (status merge) and
+    # must not corrupt the cached snapshot.
+    disk_runs = [dict(r) for r in _eval_list_runs_cached()]
     for run in disk_runs:
         rid = run.get("run_id", "")
         if rid in _eval_runs:
@@ -1475,14 +1638,11 @@ async def eval_get_run(run_id: str) -> dict[str, Any]:
     for f in sorted(output_dir.glob("*__*.json")):
         if f.name in ("config.json", "summary.json"):
             continue
-        try:
-            data = json.loads(f.read_text(encoding="utf-8"))
-            detail_files.append({
-                "file": f.name,
-                "count": len(data) if isinstance(data, list) else 0,
-            })
-        except Exception:
-            pass
+        # Cheap count -- this used to json.loads every result file, which
+        # froze the whole console (minutes of blocked event loop) once a
+        # live run's files grew into the tens of MB.
+        count, _correct = result_stats_cached(f)
+        detail_files.append({"file": f.name, "count": count})
     result["detail_files"] = detail_files
     return result
 
