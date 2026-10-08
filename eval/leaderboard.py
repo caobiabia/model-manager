@@ -103,6 +103,9 @@ def import_run(
     if config_file.exists():
         config = json.loads(config_file.read_text(encoding="utf-8"))
 
+    if summary.get("status") == "error":
+        return {"ok": False, "error": f"Run failed: {summary.get('error', 'unknown error')}"}
+
     mode = summary.get("mode", config.get("mode", "?"))
     # 思考强度 (档位 label 或数值); None = 未指定/模型不支持, 与旧条目等价
     effort = config.get("reasoning_effort", summary.get("reasoning_effort"))
@@ -113,12 +116,27 @@ def import_run(
     entries = _load()
     imported = 0
     replaced = 0
+    skipped: list[dict[str, Any]] = []
 
     for r in results:
         model_key = r.get("model_key", "")
         bench_id = r.get("bench_id", "")
         bench_name = r.get("bench_name", bench_id)
         category = _bench_category(bench_id)
+
+        # A pair that stopped early (circuit-break / user stop) or left
+        # questions unscored must not enter the leaderboard: its accuracy then
+        # reflects how much of the bench happened to run, and reads as a real
+        # measurement (epoch1 C-Eval once showed 3.5% while the questions it
+        # did run scored 91.7%). Resume the run first, then import.
+        if r.get("aborted") or r.get("unreachable") or r.get("unattempted", 0) > 0:
+            skipped.append({
+                "model_key": model_key, "bench_id": bench_id,
+                "processed": r.get("processed", 0),
+                "unattempted": r.get("unattempted", 0),
+                "reason": r.get("error", "incomplete: questions left unscored"),
+            })
+            continue
 
         # look up model display name
         from model_config import get_model_by_name
@@ -169,6 +187,7 @@ def import_run(
         "ok": True,
         "imported": imported,
         "replaced": replaced,
+        "skipped": skipped,
         "total_entries": len(entries),
     }
 

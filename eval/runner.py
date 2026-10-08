@@ -27,21 +27,29 @@ from typing import Any
 
 from eval.common import (
     EVAL_OUTPUT_DIR,
+    GenerationTimeout,
+    RequestAborted,
+    abort_requested,
     call_model,
+    clear_abort,
     create_client,
     extract_answer,
     extract_free_answer,
     get_extract_model,
+    is_deterministic_failure,
+    request_abort,
     save_progress,
     strip_think,
 )
 from eval.benches import get_bench
 from model_config import get_model_by_name
 
-# Circuit-break a model after this many consecutive failures within one
-# (model, bench) pair (indicates the model is unreachable / every request
-# is timing out). The model's remaining questions are then scored 0 — the
-# run itself keeps going and must NOT be reported as an error.
+# Circuit-break a *bench* after this many consecutive infrastructure failures
+# (timeouts / connection loss -- the endpoint is unreachable or every request
+# stalls). The bench stops, its unprocessed questions stay unanswered on disk
+# so a later resume retries them, and the run keeps going. It deliberately
+# does NOT touch sibling benches: a long-CoT bench tripping its breaker used
+# to zero out a model's whole MMLU/C-Eval run that was progressing fine.
 MAX_CONSECUTIVE_ERRORS = 5
 
 class EvalRunner:
@@ -84,25 +92,33 @@ class EvalRunner:
         # live progress snapshot, updated alongside queue events
         self.progress: dict[str, dict] = {}
         self._progress_lock = Lock()
-        # model_key -> reason, set when a bench circuit-breaks the model
-        # (MAX_CONSECUTIVE_ERRORS consecutive failures). All benches of that
-        # model then stop probing and score their remaining questions 0.
-        self._dead_models: dict[str, str] = {}
+        # (model_key, bench_id) -> reason, set when that bench circuit-breaks
+        # (MAX_CONSECUTIVE_ERRORS consecutive infrastructure failures). Only
+        # the failing bench stops; siblings keep running.
+        self._dead_benches: dict[tuple[str, str], str] = {}
         self._dead_lock = Lock()
 
-    def _mark_model_dead(self, model_key: str, reason: str) -> None:
-        """Circuit-break a model for all its benches (first reason wins)."""
+    def _mark_bench_dead(self, model_key: str, bench_id: str, reason: str) -> None:
+        """Circuit-break one bench (first reason wins)."""
         with self._dead_lock:
-            self._dead_models.setdefault(model_key, reason)
+            self._dead_benches.setdefault((model_key, bench_id), reason)
 
-    def _model_dead_reason(self, model_key: str) -> str | None:
+    def _bench_dead_reason(self, model_key: str, bench_id: str) -> str | None:
         with self._dead_lock:
-            return self._dead_models.get(model_key)
+            return self._dead_benches.get((model_key, bench_id))
 
     # -- public API -------------------------------------------------------
 
     def stop(self) -> None:
+        """Stop the run *and* abort what is already generating.
+
+        Setting the flag alone only discards results: the abandoned HTTP
+        requests kept running on the engine (dozens of them generating for
+        45+ minutes after a stop). Closing their streams makes vLLM abort
+        the requests server-side.
+        """
         self._stop.set()
+        request_abort()
 
     @property
     def stopped(self) -> bool:
@@ -146,7 +162,11 @@ class EvalRunner:
         data immediately, before any questions are processed.
         """
         from eval.benches import get_bench
-        from eval.common import load_processed_ids, load_jsonl
+        from eval.common import (
+            count_jsonl_cached,
+            load_processed_ids,
+            result_stats_cached,
+        )
 
         for model_key in self.model_keys:
             cfg = get_model_by_name(model_key)
@@ -162,18 +182,16 @@ class EvalRunner:
                 processed_ids = load_processed_ids(pf)
                 total = 0
                 if Path(bench.data_file).exists():
-                    total = len(load_jsonl(bench.data_file))
+                    total = count_jsonl_cached(bench.data_file)
                 done = min(len(processed_ids), total) if total > 0 else len(processed_ids)
                 correct = 0
                 if rf.exists():
-                    try:
-                        results = json.loads(rf.read_text(encoding="utf-8"))
-                        seen = set()
-                        unique = [x for x in results if x.get("realidx") not in seen and not seen.add(x.get("realidx"))]
-                        done = max(done, min(len(unique), total)) if total > 0 else len(unique)
-                        correct = sum(1 for x in unique if x.get("correct") is True)
-                    except Exception:
-                        pass
+                    # Cheap stats: never json.loads a multi-MB result file
+                    # just to rebuild the initial progress display.
+                    n, c = result_stats_cached(rf)
+                    done = max(done, min(n, total)) if total > 0 else n
+                    if c is not None:
+                        correct = c
                 if getattr(bench, "scorable", True):
                     acc = round(correct / done * 100, 1) if done > 0 else 0
                 else:
@@ -190,6 +208,9 @@ class EvalRunner:
 
     def run(self) -> None:
         """Main entry -- call from a background thread."""
+        # Re-arm request submission: a stop of a previous run leaves the
+        # global abort latched, and this runner may be a resume.
+        clear_abort()
         try:
             self.queue.put({
                 "type": "start",
@@ -204,9 +225,20 @@ class EvalRunner:
 
             self._save_config()
 
-            # MCQ answer extraction is model-only: require the extractor
-            # up front so a missing config fails the run immediately.
-            ext_client, ext_model, ext_deepseek = get_extract_model()
+            # MCQ answer extraction is model-only: resolve (and probe) the
+            # extractor up front so an unreachable one fails the run right
+            # away instead of scoring every MCQ answer as wrong. Runs made
+            # only of free/follow benches don't need it at all -- the
+            # inverse_ifeval judge resolves it lazily, when its bench runs.
+            needs_extract = any(
+                getattr(bench, "format", "mcq") == "mcq"
+                for bench in (get_bench(b) for b in self.bench_ids)
+                if bench is not None
+            )
+            if needs_extract:
+                ext_client, ext_model, ext_deepseek = get_extract_model()
+            else:
+                ext_client, ext_model, ext_deepseek = None, None, False
 
             # Run all models in parallel -- each model gets its own
             # thread, and within each model all benches run concurrently.
@@ -240,6 +272,13 @@ class EvalRunner:
                     ],
                 })
         except Exception as e:
+            # Record the failure on the runner *and* on disk: self.error is
+            # what the app reports as the run status, and without the summary
+            # the run looked "completed" (with zero results) after a refresh,
+            # so a failed run -- e.g. an unreachable answer extractor -- was
+            # indistinguishable from a finished one.
+            self.error = str(e)
+            self._save_summary()
             self.queue.put({"type": "error", "run_id": self.run_id, "message": str(e)})
         finally:
             self.queue.put(None)  # sentinel for SSE EOF
@@ -316,6 +355,13 @@ class EvalRunner:
         for t in threads:
             t.join()
 
+        # All benches of this model are done (or aborted): drop the HTTP
+        # connections instead of leaving them around for the GC.
+        try:
+            client.close()
+        except Exception:
+            pass
+
     # -- per-(model, bench) ----------------------------------------------
 
     def _run_bench(
@@ -357,6 +403,12 @@ class EvalRunner:
         progress_file = str(
             self.output_dir / f"progress_{model_short}_{bench_id}_{self.mode}.txt"
         )
+
+        # Bench-scoped request control: lets this bench abort its own
+        # in-flight requests (circuit-break) without touching siblings, and
+        # re-arms requests when a previously aborted bench is resumed.
+        scope = f"{model_key}|{bench_id}"
+        clear_abort(scope)
 
         if self.no_resume:
             for f in [results_file, progress_file]:
@@ -434,6 +486,8 @@ class EvalRunner:
                 "processed": len(results), "correct": correct,
                 "accuracy": acc, "time_elapsed": 0,
                 "results_file": results_file,
+                "aborted": False, "unreachable": False,
+                "unattempted": 0, "failed_pending": 0,
             }
             with self._progress_lock:
                 pk = f"{model_key}|{bench_id}"
@@ -456,11 +510,14 @@ class EvalRunner:
         start_time = time.time()
         consecutive_errors = 0
         aborted = False
-        # Set when the model circuit-broke (directly or via a sibling bench).
-        # The remaining questions are then filled with zero-score results so
-        # the pair still reaches total/total and the run completes cleanly.
+        # Set when this bench circuit-broke. Its unanswered questions are
+        # left out of the results file, so a later resume retries them.
         unreachable = False
         unreachable_error = ""
+        # Questions whose request failed for infra reasons (timeout /
+        # connection loss): attempted but deliberately not scored, because a
+        # fabricated 0 is indistinguishable from a wrong answer.
+        failed_pending = 0
 
         # Per-(model, bench) persistence. Each bench writes only its own
         # results list/file, and only from this thread, so no shared global
@@ -483,14 +540,17 @@ class EvalRunner:
                 # whole bench).
                 tmp_file = results_file + ".tmp"
                 with open(tmp_file, "w", encoding="utf-8") as f:
-                    json.dump(results, f, indent=2, ensure_ascii=False)
+                    # Compact JSON: indent=2 roughly doubles both the dump
+                    # time (GIL held, web UI starves) and the file size of a
+                    # 14k-question bench, for readability nobody reads.
+                    json.dump(results, f, ensure_ascii=False)
                     f.flush()
                     os.fsync(f.fileno())
                 os.replace(tmp_file, results_file)
             pending = 0
 
         def process_one(idx: int, problem: dict) -> dict | None:
-            if self._stop.is_set():
+            if self._stop.is_set() or abort_requested(scope):
                 return None
             realidx = problem.get("realidx", idx)
             question = problem.get("question", "")
@@ -516,11 +576,26 @@ class EvalRunner:
                     temperature=self.temperature,
                     reasoning_effort=self.reasoning_effort,
                     thinking_spec=thinking_spec,
+                    scope=scope,
                 )
+            except RequestAborted:
+                # Run/bench aborted: drop the question entirely so it stays
+                # retryable instead of being recorded as answered.
+                return None
+            except GenerationTimeout as e:
+                return {
+                    "realidx": realidx, "pending": True,
+                    "error": f"generation timeout: {e}",
+                }
             except Exception as e:
-                # Request failure (timeout / unreachable): score this
-                # question 0 and keep the bench going.
-                return {"realidx": realidx, "error": str(e), "correct": False}
+                if is_deterministic_failure(e):
+                    # 4xx (e.g. prompt exceeds the context): repeats forever,
+                    # so record it as a real wrong answer to make progress.
+                    return {
+                        "realidx": realidx,
+                        "error": f"request rejected: {e}", "correct": False,
+                    }
+                return {"realidx": realidx, "pending": True, "error": str(e)}
 
             # vLLM without --reasoning-parser returns the thinking inline in
             # the content; pull it out so extractors/verifiers only see the
@@ -600,10 +675,9 @@ class EvalRunner:
                     idx, q.get("realidx", idx))
                 next_idx += 1
 
-        # Pre-fill the pool with the current quota. If a sibling bench has
-        # already circuit-broken this model, don't even submit: go straight
-        # to the zero-fill below.
-        dead_reason = self._model_dead_reason(model_key)
+        # Pre-fill the pool with the current quota. A bench that circuit-broke
+        # in an earlier run (resume) submits nothing.
+        dead_reason = self._bench_dead_reason(model_key, bench_id)
         if dead_reason:
             aborted = True
             unreachable = True
@@ -612,15 +686,6 @@ class EvalRunner:
             _submit_more(get_quota(bench_id))
 
         while future_map:
-            # A sibling bench may already have circuit-broken this model:
-            # stop probing immediately, the zero-fill below finishes us.
-            dead_reason = self._model_dead_reason(model_key)
-            if dead_reason and not aborted:
-                aborted = True
-                unreachable = True
-                unreachable_error = dead_reason
-                break
-
             # Wait for at least one future to complete (poll every 2s)
             done_set, _ = concurrent.futures.wait(
                 future_map.keys(),
@@ -637,16 +702,51 @@ class EvalRunner:
             for future in done_set:
                 i, realidx = future_map.pop(future)
 
-                # Refill up to the (possibly grown) quota
-                if not self.stopped:
+                # Refill up to the (possibly grown) quota (never after an abort)
+                if not self.stopped and not aborted:
                     _submit_more(get_quota(bench_id))
 
                 try:
                     result = future.result()
                 except Exception as e:
-                    result = {"realidx": realidx, "error": str(e), "correct": False}
+                    if is_deterministic_failure(e):
+                        result = {
+                            "realidx": realidx,
+                            "error": f"request rejected: {e}", "correct": False,
+                        }
+                    else:
+                        result = {
+                            "realidx": realidx, "pending": True,
+                            "error": str(e),
+                        }
+                completed += 1
 
-                if result is not None:
+                if result is None:
+                    # Discarded (stop / abort): stays retryable on resume.
+                    pass
+                elif result.get("pending"):
+                    # Infra failure: attempted but NOT scored. Nothing is
+                    # written, so a resume retries the question instead of
+                    # inheriting a fabricated zero.
+                    failed_pending += 1
+                    consecutive_errors += 1
+                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                        unreachable_error = (
+                            f"Bench '{bench_id}' stopped after "
+                            f"{MAX_CONSECUTIVE_ERRORS} consecutive request "
+                            f"failures. Last error: "
+                            f"{result.get('error', 'unknown')}"
+                        )
+                        self._mark_bench_dead(
+                            model_key, bench_id, unreachable_error,
+                        )
+                        # Close this bench's in-flight streams: the server
+                        # then aborts those generations instead of finishing
+                        # answers nobody will read.
+                        request_abort(scope)
+                        aborted = True
+                        unreachable = True
+                else:
                     results.append(result)
                     if result.get("correct") is True:
                         correct_count += 1
@@ -657,25 +757,6 @@ class EvalRunner:
                     # result (question discarded at stop time) must stay
                     # retryable on resume.
                     save_progress(progress_file, realidx)
-                completed += 1
-
-                # Track consecutive errors. A burst of failures means the
-                # model is unreachable (or every request times out while the
-                # server is still generating). This must NOT fail the run:
-                # circuit-break the model, score its remaining questions 0.
-                if result and "error" in result:
-                    consecutive_errors += 1
-                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
-                        unreachable_error = (
-                            f"Model '{model_key}' appears unreachable "
-                            f"({MAX_CONSECUTIVE_ERRORS} consecutive failures). "
-                            f"Last error: {result.get('error', 'unknown')}"
-                        )
-                        self._mark_model_dead(model_key, unreachable_error)
-                        aborted = True
-                        unreachable = True
-                        break
-                else:
                     consecutive_errors = 0
 
                 processed_count = len(results)
@@ -704,49 +785,25 @@ class EvalRunner:
             if aborted:
                 break
 
-        # Shutdown: if stopped or the model is unreachable, don't wait for
-        # in-flight API calls (a dead endpoint can hang until the request
-        # timeout, and we are going to score those questions 0 anyway).
+        # Shutdown: if stopped or this bench circuit-broke, don't wait for
+        # in-flight API calls. request_abort() has already closed their
+        # streams (so the server stops generating), which lets the threads
+        # unwind immediately instead of holding the connection until the
+        # read timeout.
         dropping = self.stopped or unreachable
+        if dropping:
+            request_abort(scope)
         executor.shutdown(wait=not dropping, cancel_futures=dropping)
 
-        # Unreachable model: score every not-yet-processed question 0 so the
-        # pair reaches total/total and the run completes instead of erroring.
-        # (If the user stopped the run concurrently, skip this — the
-        # unfinished questions stay retryable on resume.)
-        if unreachable and not self.stopped:
-            done_realidxs = {str(r.get("realidx")) for r in results}
-            is_free = getattr(bench, "format", "mcq") == "free"
-            for i, q in enumerate(questions):
-                realidx = q.get("realidx", i)
-                if str(realidx) in done_realidxs:
-                    continue
-                answer_idx = q.get("answer_idx", "")
-                gold = (
-                    str(q.get("answer", answer_idx)).strip()
-                    if is_free else answer_idx
-                )
-                results.append({
-                    "realidx": realidx,
-                    "question": q.get("question", ""),
-                    "options": q.get("options", {}),
-                    "answer_idx": gold,
-                    "predicted_answer": "",
-                    "correct": False,
-                    "correct_loose": None,
-                    "raw_response": "",
-                    "reasoning": "",
-                    "token_usage": {"prompt_tokens": 0, "completion_tokens": 0},
-                    "time_elapsed": 0,
-                    "error": unreachable_error,
-                })
-                save_progress(progress_file, realidx)
-
         # Persist any buffered results so the on-disk file is complete.
+        # Nothing is fabricated here: questions this bench never answered
+        # (stop, or circuit-break) are simply absent, so a resume retries
+        # exactly those.
         flush_results()
 
         elapsed = time.time() - start_time
         processed_count = len(results)
+        unattempted = max(0, total - processed_count)
         accuracy = (
             round(correct_count / processed_count * 100, 2)
             if processed_count > 0 else None
@@ -782,16 +839,20 @@ class EvalRunner:
             "results_file": results_file,
             "aborted": aborted,
             "unreachable": unreachable,
+            # Questions the bench never scored (stop / circuit-break /
+            # per-question infra failures). A resume picks up exactly these.
+            "unattempted": unattempted,
+            "failed_pending": failed_pending,
         }
         if unreachable_error:
             summary["error"] = unreachable_error
         self.results[(model_key, bench_id)] = summary
-        early_stopped = bool(self.stopped and processed_count < total)
+        incomplete = processed_count < total
         with self._progress_lock:
             self.progress[pk].update({
-                "done": processed_count, "correct": correct_count,
-                "accuracy": accuracy,
-                "status": "interrupted" if early_stopped else "done",
+                "done": processed_count, "total": total,
+                "correct": correct_count, "accuracy": accuracy,
+                "status": "interrupted" if incomplete else "done",
             })
 
         self.queue.put({
@@ -799,6 +860,7 @@ class EvalRunner:
             "model_key": model_key, "bench_id": bench_id,
             "bench_name": bench.name,
             "processed": processed_count, "correct": correct_count,
+            "total": total, "unattempted": unattempted,
             "accuracy": accuracy, "time": round(elapsed, 0),
             "aborted": aborted, "stopped": self.stopped,
             "unreachable": unreachable, "error": unreachable_error or None,
