@@ -1,5 +1,5 @@
 {
-  "updated": "2026-09-14",
+  "updated": "2026-09-16",
   "source_note": "MedBench 官方榜单（API 评测 + 自测提交），人工维护快照",
   "sub_benches": [
     "医学知识问答",
@@ -52,6 +52,28 @@
         64.5,
         51.3
       ]
+    },
+    {
+      "model_name": "Qwen3.8-Flash-Next",
+      "overall": 63.8,
+      "scores": [
+        69.9,
+        76.5,
+        60.5,
+        62.4,
+        49.6
+      ]
+    },
+    {
+      "model_name": "华数智医-MDAM-Flash",
+      "overall": 75.7,
+      "scores": [
+        78.3,
+        78.6,
+        69.6,
+        70.1,
+        81.7
+      ]
     }
   ],
   "self_test": [
@@ -71,6 +93,24 @@
         61.9,
         64.5,
         58.4
+      ]
+    },
+    {
+      "no": 2,
+      "submitted_at": "2026/09/16 13:10:32",
+      "model_name": "Qwen3.6-35B-A3B (full-sft-medbench-instruct-v8.0-epoch3)",
+      "org": "个人",
+      "type": "闭源",
+      "params": "35B",
+      "public": "不公开",
+      "status": "评测完成",
+      "overall": 68.0,
+      "scores": [
+        70.9,
+        75.8,
+        59.3,
+        65.5,
+        68.4
       ]
     },
     {

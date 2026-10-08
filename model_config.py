@@ -60,6 +60,16 @@ DEFAULT_VLLM_ARGS = {
     "reasoning-parser": "qwen3",
 }
 
+# 答案抽取模型 (仅 eval harness 使用): MODELS 里的一个 key。
+#   * 指向 provider="deepseek" 的远程条目 → 用它的 base_url / api_key / 模型名抽取;
+#   * 指向本地 vLLM 条目 → 用它的 port / served_model_name;
+#   * 置为 "" → 回退到硬编码的本机实例 127.0.0.1:26001 (Qwen/Qwen3.6-35B-A3B)。
+# MCQ 判分 (ceval / mmlu_std / gpqa_diamond / 医学 MCQ) 与 inverse_ifeval 的
+# judge 都走这个模型: eval 侧每轮 run 开始时解析并探活一次, 不可达直接报错
+# (以前抽取模型挂了会让所有 MCQ 静默判错, ceval 显示 0% 却不报错)。
+# 该条目本身建议放在 models_user.json (含 api_key, 已 gitignore)。
+EXTRACT_MODEL_KEY = "himarket_deepseek_v41_flash"
+
 MODELS: dict = {
     "qwen36_35b_sft_med_ep1": {
         "display_name": "Qwen3.6-35B-A3B (full-sft-medical-mix-v7.0-epoch1)",
@@ -155,6 +165,120 @@ MODELS: dict = {
         "lora_path": "/data1/users/caoshipeng/outputs/Qwen3.6-35B-A3B-lora-sft-medagentbench-medbench-instruct-v7.3/v1-20260914-174017/checkpoint-100",
         "max_lora_rank": 64,
         "port": 26024,
+        "gpu": 2,
+        "vllm_args": {"max-model-len": 262144},
+    },
+    # ─ v8.0 full-sft (medagentbench + medbench instruct, 3 epoch; save_strategy=epoch,
+    #    总 624 step → checkpoint-208/416/624 即 epoch 1/2/3) ──
+    "qwen36_35b_sft_med_v80_ep1": {
+        "display_name": "Qwen3.6-35B-A3B (full-sft-medbench-instruct-v8.0-epoch1)",
+        "served_model_name": "Qwen3.6-35B-A3B-full-sft-medbench-instruct-v8.0-epoch1",
+        "model_path": "/data1/users/caoshipeng/outputs/Qwen3.6-35B-A3B-full-sft-medagentbench-medbench-instruct-v8.0/v1-20260915-155539/checkpoint-208",
+        "port": 26025,
+        "gpu": 0,
+        "vllm_args": {"max-model-len": 262144},
+    },
+    "qwen36_35b_sft_med_v80_ep2": {
+        "display_name": "Qwen3.6-35B-A3B (full-sft-medbench-instruct-v8.0-epoch2)",
+        "served_model_name": "Qwen3.6-35B-A3B-full-sft-medbench-instruct-v8.0-epoch2",
+        "model_path": "/data1/users/caoshipeng/outputs/Qwen3.6-35B-A3B-full-sft-medagentbench-medbench-instruct-v8.0/v1-20260915-155539/checkpoint-416",
+        "port": 26026,
+        "gpu": 1,
+        "vllm_args": {"max-model-len": 262144},
+    },
+    "qwen36_35b_sft_med_v80_ep3": {
+        "display_name": "Qwen3.6-35B-A3B (full-sft-medbench-instruct-v8.0-epoch3)",
+        "served_model_name": "Qwen3.6-35B-A3B-full-sft-medbench-instruct-v8.0-epoch3",
+        "model_path": "/data1/users/caoshipeng/outputs/Qwen3.6-35B-A3B-full-sft-medagentbench-medbench-instruct-v8.0/v1-20260915-155539/checkpoint-624",
+        "port": 26027,
+        "gpu": 2,
+        "vllm_args": {"max-model-len": 262144},
+    },
+    # ─ v8.1 full-sft (medagentbench + medbench instruct, 5 epoch; save_strategy=epoch,
+    #    总 2190 step → checkpoint-438/876/1314/1752/2190 即 epoch 1/2/3/4/5) ──
+    "qwen36_35b_sft_med_v81_ep1": {
+        "display_name": "Qwen3.6-35B-A3B (full-sft-medbench-instruct-v8.1-epoch1)",
+        "served_model_name": "Qwen3.6-35B-A3B-full-sft-medbench-instruct-v8.1-epoch1",
+        "model_path": "/data1/users/caoshipeng/outputs/Qwen3.6-35B-A3B-full-sft-medagentbench-medbench-instruct-v8.1/v0-20260917-103437/checkpoint-438",
+        "port": 26028,
+        "gpu": 0,
+        "vllm_args": {"max-model-len": 262144},
+    },
+    "qwen36_35b_sft_med_v81_ep2": {
+        "display_name": "Qwen3.6-35B-A3B (full-sft-medbench-instruct-v8.1-epoch2)",
+        "served_model_name": "Qwen3.6-35B-A3B-full-sft-medbench-instruct-v8.1-epoch2",
+        "model_path": "/data1/users/caoshipeng/outputs/Qwen3.6-35B-A3B-full-sft-medagentbench-medbench-instruct-v8.1/v0-20260917-103437/checkpoint-876",
+        "port": 26029,
+        "gpu": 1,
+        "vllm_args": {"max-model-len": 262144},
+    },
+    "qwen36_35b_sft_med_v81_ep3": {
+        "display_name": "Qwen3.6-35B-A3B (full-sft-medbench-instruct-v8.1-epoch3)",
+        "served_model_name": "Qwen3.6-35B-A3B-full-sft-medbench-instruct-v8.1-epoch3",
+        "model_path": "/data1/users/caoshipeng/outputs/Qwen3.6-35B-A3B-full-sft-medagentbench-medbench-instruct-v8.1/v0-20260917-103437/checkpoint-1314",
+        "port": 26030,
+        "gpu": 2,
+        "vllm_args": {"max-model-len": 262144},
+    },
+    "qwen36_35b_sft_med_v81_ep4": {
+        "display_name": "Qwen3.6-35B-A3B (full-sft-medbench-instruct-v8.1-epoch4)",
+        "served_model_name": "Qwen3.6-35B-A3B-full-sft-medbench-instruct-v8.1-epoch4",
+        "model_path": "/data1/users/caoshipeng/outputs/Qwen3.6-35B-A3B-full-sft-medagentbench-medbench-instruct-v8.1/v0-20260917-103437/checkpoint-1752",
+        "port": 26031,
+        "gpu": 3,
+        "vllm_args": {"max-model-len": 262144},
+    },
+    "qwen36_35b_sft_med_v81_ep5": {
+        "display_name": "Qwen3.6-35B-A3B (full-sft-medbench-instruct-v8.1-epoch5)",
+        "served_model_name": "Qwen3.6-35B-A3B-full-sft-medbench-instruct-v8.1-epoch5",
+        "model_path": "/data1/users/caoshipeng/outputs/Qwen3.6-35B-A3B-full-sft-medagentbench-medbench-instruct-v8.1/v0-20260917-103437/checkpoint-2190",
+        "port": 26032,
+        "gpu": 4,
+        "vllm_args": {"max-model-len": 262144},
+    },
+    # ─ v8.1 GRPO (RL, MedLearnable): 起自 full-sft v8.1-epoch3 (checkpoint-1314),
+    #   verl 训练 global_step_228, HF 权重导出在 models/GRPO-v81ep3-step228-hf ──
+    "qwen36_35b_grpo_v81_ep3_step228": {
+        "display_name": "Qwen3.6-35B-A3B (grpo-medlearnable-v8.1-epoch3-step228)",
+        "served_model_name": "Qwen3.6-35B-A3B-grpo-medlearnable-v8.1-epoch3-step228",
+        "model_path": "/data1/users/caoshipeng/models/GRPO-v81ep3-step228-hf",
+        "port": 26033,
+        "gpu": 7,
+        "vllm_args": {"max-model-len": 262144},
+    },
+    "qwen36_35b_grpo_v81_ep3_step456": {
+        # 同一 RL run (GRPO-MedLearnable-v81ep3-from228) 的 global_step_456 导出
+        "display_name": "Qwen3.6-35B-A3B (grpo-medlearnable-v8.1-epoch3-step456)",
+        "served_model_name": "Qwen3.6-35B-A3B-grpo-medlearnable-v8.1-epoch3-step456",
+        "model_path": "/data1/users/caoshipeng/models/GRPO-v81ep3-rl-step456-hf",
+        "port": 26034,
+        "gpu": 6,
+        "vllm_args": {"max-model-len": 262144},
+    },
+    # ─ MedBench full-sft v1 (swift 全参微调, 3 epoch, save_strategy=epoch;
+    #   数据 = V4.1Flash 全量 6763 题; 共 165 step → checkpoint-55/110/165 即 epoch 1/2/3;
+    #   底模 /home/users/caoshipeng/workspace/models/Qwen3.6-35B-A3B) ──
+    "qwen36_35b_medbench_v1_ep1": {
+        "display_name": "Qwen3.6-35B-A3B (medbench-full-sft-v1-epoch1)",
+        "served_model_name": "Qwen3.6-35B-A3B-medbench-full-sft-v1-epoch1",
+        "model_path": "/data1/users/caoshipeng/models/Qwen3.6-35B-A3B-Medbench/v1-20260921-153111/checkpoint-55",
+        "port": 26035,
+        "gpu": 0,
+        "vllm_args": {"max-model-len": 262144},
+    },
+    "qwen36_35b_medbench_v1_ep2": {
+        "display_name": "Qwen3.6-35B-A3B (medbench-full-sft-v1-epoch2)",
+        "served_model_name": "Qwen3.6-35B-A3B-medbench-full-sft-v1-epoch2",
+        "model_path": "/data1/users/caoshipeng/models/Qwen3.6-35B-A3B-Medbench/v1-20260921-153111/checkpoint-110",
+        "port": 26036,
+        "gpu": 1,
+        "vllm_args": {"max-model-len": 262144},
+    },
+    "qwen36_35b_medbench_v1_ep3": {
+        "display_name": "Qwen3.6-35B-A3B (medbench-full-sft-v1-epoch3)",
+        "served_model_name": "Qwen3.6-35B-A3B-medbench-full-sft-v1-epoch3",
+        "model_path": "/data1/users/caoshipeng/models/Qwen3.6-35B-A3B-Medbench/v1-20260921-153111/checkpoint-165",
+        "port": 26037,
         "gpu": 2,
         "vllm_args": {"max-model-len": 262144},
     },

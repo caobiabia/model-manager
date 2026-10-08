@@ -1,4 +1,10 @@
 {
+  "qwen36_35b_medbench_v1_ep1": "V4.1Flash 全量6763题 一轮",
+  "qwen36_35b_medbench_v1_ep2": "V4.1Flash 全量6763题 二轮",
+  "qwen36_35b_medbench_v1_ep3": "V4.1Flash 全量6763题 三轮",
+  "himarket_deepseek_v41_flash": "答案抽取/judge 用（HiMarket 远程 API）",
+  "qwen36_35b_grpo_v81_ep3_step228": "GRPO-MedLearnable RL 228 步（v8.1 ep3 起）",
+  "qwen36_35b_grpo_v81_ep3_step456": "GRPO-MedLearnable RL 456 步（v8.1 ep3 起，自 228 续训）",
   "qwen35b_full_sft_5xqa_pubmedqa": "5:1 一轮",
   "qwen35b_full_sft_medical_mix_v3_epoch1": "1:1 一轮",
   "qwen35b_full_sft_medical_mix_v3_epoch2": "1:1 二轮",
