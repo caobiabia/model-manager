@@ -9,5 +9,12 @@
   "qwen35b_full_sft_medical_mix_v3_epoch1": "1:1 一轮",
   "qwen35b_full_sft_medical_mix_v3_epoch2": "1:1 二轮",
   "qwen35b": "基座",
-  "qwen35_9b_base": "基座"
+  "qwen35_9b_base": "基座",
+  "deepseek_v4_flash_0731_med_v81_ckpt_3315": "med-v8.1，第 1 轮，checkpoint-3315。mysslvpn GPU 0,1,2,3，TP=4，LoRA rank=16，上下文 262144，max-num-seqs=128。经本机 SSH 隧道接入 H200。",
+  "deepseek_v4_flash_0731_med_v81_ckpt_6630": "med-v8.1，第 2 轮，checkpoint-6630。mysslvpn GPU 4,5,6,7，TP=4，LoRA rank=16，上下文 262144，max-num-seqs=128。经本机 SSH 隧道接入 H200。",
+  "deepseek_v4_flash_0731_med_v81_ckpt_9945": "med-v8.1，第 3 轮，checkpoint-9945。mysslvpn2 GPU 0,1,2,3，TP=4，LoRA rank=16，上下文 262144，max-num-seqs=128。经本机 SSH 隧道接入 H200。",
+  "deepseek_v4_flash_0731_med_v81_ckpt_13260": "med-v8.1，第 4 轮，checkpoint-13260。mysslvpn2 GPU 4,5,6,7，TP=4，LoRA rank=16，上下文 262144，max-num-seqs=128。经本机 SSH 隧道接入 H200。",
+  "deepseek_v4_flash_0731_mab2_ep1_ckpt_606": "MAB 知识点无思考 + CoT 双数据集 LoRA，第 1 轮，checkpoint-606。mysslvpn2 GPU 4,5,6,7，TP=4，rank=16，256K 上下文、128 序列上限。三个 epoch 共用 26111 接口，以模型名选择权重；支持思考/无思考。经本地受监护 SSH 隧道映射至 H200。",
+  "deepseek_v4_flash_0731_mab2_ep2_ckpt_1212": "MAB 知识点无思考 + CoT 双数据集 LoRA，第 2 轮，checkpoint-1212。mysslvpn2 GPU 4,5,6,7，TP=4，rank=16，256K 上下文、128 序列上限。三个 epoch 共用 26111 接口，以模型名选择权重；支持思考/无思考。经本地受监护 SSH 隧道映射至 H200。",
+  "deepseek_v4_flash_0731_mab2_ep3_ckpt_1818": "MAB 知识点无思考 + CoT 双数据集 LoRA，第 3 轮，checkpoint-1818。mysslvpn2 GPU 4,5,6,7，TP=4，rank=16，256K 上下文、128 序列上限。三个 epoch 共用 26111 接口，以模型名选择权重；支持思考/无思考。经本地受监护 SSH 隧道映射至 H200。"
 }

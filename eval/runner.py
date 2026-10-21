@@ -52,6 +52,28 @@ from model_config import get_model_by_name
 # to zero out a model's whole MMLU/C-Eval run that was progressing fine.
 MAX_CONSECUTIVE_ERRORS = 5
 
+
+def summary_status(summary: dict, config: dict | None = None) -> str:
+    """A finished worker is not a completed evaluation if answers are missing."""
+    status = summary.get("status", "completed")
+    if status != "completed":
+        return status
+    config = config or {}
+    results = summary.get("results", [])
+    expected = {(m, b) for m in config.get("model_keys", [])
+                for b in config.get("bench_ids", [])}
+    recorded = {(r.get("model_key"), r.get("bench_id")) for r in results}
+    if expected - recorded:
+        return "interrupted"
+    limited = config.get("limit", 0) > 0
+    if any(r.get("unreachable") or r.get("aborted")
+           or r.get("failed_pending", 0) > 0
+           or (not limited and r.get("unattempted", 0) > 0)
+           for r in results):
+        return "interrupted"
+    return status
+
+
 class EvalRunner:
     """Run one evaluation pass across models x benches."""
 
@@ -67,6 +89,7 @@ class EvalRunner:
         max_model_len: int | None = None,
         temperature: float | None = None,
         reasoning_effort=None,
+        auto_retry_incomplete: bool = False,
     ):
         self.run_id = run_id
         self.model_keys = model_keys
@@ -80,6 +103,10 @@ class EvalRunner:
         # Optional thinking-effort request (label or number, per each model's
         # `thinking` spec); None = model-side default, preserving old behavior
         self.reasoning_effort = reasoning_effort
+        self.auto_retry_incomplete = bool(auto_retry_incomplete)
+        self.retry_round = 0
+        self._retry_waiting = False
+        self._failure_lock = Lock()
 
         self.queue: Queue[dict | None] = Queue()
         self._stop = threading.Event()
@@ -123,6 +150,18 @@ class EvalRunner:
     @property
     def stopped(self) -> bool:
         return self._stop.is_set()
+
+    @property
+    def completion_status(self) -> str:
+        if self.stopped:
+            return "stopped"
+        if self.error:
+            return "error"
+        return summary_status(
+            {"status": "completed", "results": list(self.results.values())},
+            {"model_keys": self.model_keys, "bench_ids": self.bench_ids,
+             "limit": self.limit},
+        )
 
     def model_max_len(self, model_key: str) -> int | None:
         """Context length for a model: explicit override if set, else the
@@ -243,18 +282,54 @@ class EvalRunner:
             # Run all models in parallel -- each model gets its own
             # thread, and within each model all benches run concurrently.
             # This works well when models are on different GPUs.
-            model_threads = []
-            for model_key in self.model_keys:
-                if self.stopped:
+            while True:
+                model_threads = []
+                for model_key in self.model_keys:
+                    if self.stopped:
+                        break
+                    t = threading.Thread(
+                        target=self._run_model,
+                        args=(model_key, ext_client, ext_model, ext_deepseek),
+                    )
+                    model_threads.append(t)
+                    t.start()
+                for t in model_threads:
+                    t.join()
+
+                retryable = [
+                    r for r in self.results.values()
+                    if r.get("unattempted", 0) > 0
+                    and (r.get("failed_pending", 0) > 0 or r.get("unreachable"))
+                ]
+                if (not self.auto_retry_incomplete or self.stopped
+                        or self.error or not retryable):
                     break
-                t = threading.Thread(
-                    target=self._run_model,
-                    args=(model_key, ext_client, ext_model, ext_deepseek),
-                )
-                model_threads.append(t)
-                t.start()
-            for t in model_threads:
-                t.join()
+                self.retry_round += 1
+                self._retry_waiting = True
+                event = {
+                    "type": "retry", "run_id": self.run_id,
+                    "retry_round": self.retry_round, "delay_seconds": 30,
+                    "at": datetime.now().isoformat(),
+                    "pending": [{k: r.get(k) for k in (
+                        "model_key", "bench_id", "unattempted", "error")}
+                        for r in retryable],
+                }
+                with (self.output_dir / "retry_history.jsonl").open("a", encoding="utf-8") as f:
+                    f.write(json.dumps(event, ensure_ascii=False) + "\n")
+                with self._progress_lock:
+                    for p in self.progress.values():
+                        if p.get("done", 0) < p.get("total", 0):
+                            p["status"] = "running"
+                self._save_summary()
+                self.queue.put(event)
+                if self._stop.wait(30):
+                    self._retry_waiting = False
+                    break
+                self._retry_waiting = False
+                # Later passes must preserve the first pass's saved answers.
+                self.no_resume = False
+                with self._dead_lock:
+                    self._dead_benches.clear()
 
             self._save_summary()
             if self.error:
@@ -266,6 +341,7 @@ class EvalRunner:
                 self.queue.put({
                     "type": "done",
                     "run_id": self.run_id,
+                    "status": self.completion_status,
                     "results": [
                         {**v, "model_key": k[0], "bench_id": k[1]}
                         for k, v in self.results.items()
@@ -577,6 +653,7 @@ class EvalRunner:
                     reasoning_effort=self.reasoning_effort,
                     thinking_spec=thinking_spec,
                     scope=scope,
+                    connection_recovery_timeout=180.0,
                 )
             except RequestAborted:
                 # Run/bench aborted: drop the question entirely so it stays
@@ -729,6 +806,18 @@ class EvalRunner:
                     # written, so a resume retries the question instead of
                     # inheriting a fabricated zero.
                     failed_pending += 1
+                    failure = {
+                        "at": datetime.now().isoformat(),
+                        "retry_round": self.retry_round,
+                        "model_key": model_key, "bench_id": bench_id,
+                        "realidx": realidx, "error": result.get("error"),
+                    }
+                    try:
+                        with self._failure_lock:
+                            with (self.output_dir / "request_failures.jsonl").open("a", encoding="utf-8") as f:
+                                f.write(json.dumps(failure, ensure_ascii=False) + "\n")
+                    except OSError as e:
+                        print(f"WARNING: failed to record request failure: {e}", file=sys.stderr)
                     consecutive_errors += 1
                     if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
                         unreachable_error = (
@@ -768,7 +857,7 @@ class EvalRunner:
                 elapsed = time.time() - start_time
                 with self._progress_lock:
                     self.progress[pk].update({
-                        "done": completed, "total": total,
+                        "done": processed_count, "total": total,
                         "correct": correct_count,
                         "accuracy": acc,
                         "status": "running",
@@ -776,7 +865,7 @@ class EvalRunner:
                 self.queue.put({
                     "type": "progress",
                     "model_key": model_key, "bench_id": bench_id,
-                    "done": completed, "total": total,
+                    "done": processed_count, "total": total,
                     "correct": correct_count,
                     "accuracy": acc,
                     "elapsed": round(elapsed, 0),
@@ -859,6 +948,7 @@ class EvalRunner:
             "type": "pair_done",
             "model_key": model_key, "bench_id": bench_id,
             "bench_name": bench.name,
+            "status": "interrupted" if incomplete else "done",
             "processed": processed_count, "correct": correct_count,
             "total": total, "unattempted": unattempted,
             "accuracy": accuracy, "time": round(elapsed, 0),
@@ -885,6 +975,7 @@ class EvalRunner:
             "mode": self.mode,
             "temperature": self.temperature,
             "reasoning_effort": self.reasoning_effort,
+            "auto_retry_incomplete": self.auto_retry_incomplete,
             "max_model_len": self.max_model_len,
             "workers": self.workers,
             "limit": self.limit,
@@ -908,7 +999,9 @@ class EvalRunner:
             "max_model_len": self.max_model_len,
             "started_at": started_at,
             "finished_at": datetime.now().isoformat(),
-            "status": "aborted" if self.stopped else ("error" if self.error else "completed"),
+            "status": ("aborted" if self.stopped else
+                       "running" if self._retry_waiting else self.completion_status),
+            "retry_round": self.retry_round,
             "results": [
                 {**v, "model_key": k[0], "bench_id": k[1]}
                 for k, v in self.results.items()
@@ -958,7 +1051,7 @@ def list_runs() -> list[dict[str, Any]]:
         if summary_file.exists():
             try:
                 summary = json.loads(summary_file.read_text())
-                meta["status"] = summary.get("status", "completed")
+                meta["status"] = summary_status(summary, meta.get("config"))
                 meta["summary"] = summary
             except Exception:
                 pass

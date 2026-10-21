@@ -1,15 +1,9 @@
 """
 模型配置 — 启动、评测、benchmark 的唯一数据源。
 
-!!! H200 占位版本 (2026-09-02 迁移自 yiling:/mntnlp/csp/workspace/model_config.py) !!!
-原文件里的 11 个模型条目依赖 yiling 的 /mntnlp 路径与 GPU 拓扑,在 H200 上
-不适用,因此这里 MODELS 留空。文件保留了与原版完全一致的加载/合并/辅助函数,
-model_console 的 app.py 无需修改即可 import 并启动(界面上暂时一个模型都没有)。
-
-用法: 在下方 MODELS 字典里按 key 添加 H200 上的模型,然后:
-  启动 model_console:  cd ~/workspace/model_console && python app.py   # 监听 :27000
-  (serve.py / eval_models.py 等 yiling 上层脚本暂未迁移,需要时从
-   yiling:/mntnlp/csp/workspace/ 同步过来。)
+仓库内的 MODELS 保存已有部署的模型定义。新环境需调整权重路径、端口和 GPU,
+或通过 models_user.json 添加、覆盖模型; 模板见 models_user.example.json。
+models_user.json 可含 API Key,不纳入 Git。启动方式见 README.md。
 
 字段说明 (与 yiling 原版一致):
   display_name      展示名称 (日志/汇总用)
@@ -19,7 +13,7 @@ model_console 的 app.py 无需修改即可 import 并启动(界面上暂时一�
   gpu               CUDA_VISIBLE_DEVICES
   vllm_args         vLLM CLI 参数 (覆盖 DEFAULT_VLLM_ARGS)
   provider          "vllm"(默认) 或 "deepseek" (远程 API, 无需 model_path/port/gpu)
-  base_url          仅 provider=deepseek 时指定
+  base_url          显式指定 OpenAI 兼容接口地址,优先于 port
   base_model_path   可选 — 基模路径 (与 lora_path 配合, 替代 model_path)
   lora_path         可选 — LoRA 适配器目录 (与 base_model_path 配合)
   max_lora_rank     可选 — LoRA 最大秩, 默认 64 (仅 lora 模式)
@@ -46,6 +40,7 @@ model_console 的 app.py 无需修改即可 import 并启动(界面上暂时一�
 """
 
 import json
+import os
 from pathlib import Path
 
 # vLLM 通用默认参数 (所有模型共享, 可在单个模型 vllm_args 中覆盖)
@@ -68,8 +63,9 @@ DEFAULT_VLLM_ARGS = {
 # judge 都走这个模型: eval 侧每轮 run 开始时解析并探活一次, 不可达直接报错
 # (以前抽取模型挂了会让所有 MCQ 静默判错, ceval 显示 0% 却不报错)。
 # 该条目本身建议放在 models_user.json (含 api_key, 已 gitignore)。
-EXTRACT_MODEL_KEY = "himarket_deepseek_v41_flash"
-
+EXTRACT_MODEL_KEY = os.environ.get(
+    "MODEL_CONSOLE_EXTRACT_MODEL_KEY", "h100_deepseek_v41_flash_extract_temp"
+)
 MODELS: dict = {
     "qwen36_35b_sft_med_ep1": {
         "display_name": "Qwen3.6-35B-A3B (full-sft-medical-mix-v7.0-epoch1)",
@@ -353,7 +349,7 @@ MODELS = {**MODELS, **load_user_models()}
 # ──────────── 辅助函数 ────────────
 
 def get_base_url(cfg: dict) -> str:
-    """从 port 推导 base_url (vllm 模型) 或直接返回 base_url (deepseek)。"""
+    """优先使用显式 base_url,否则从本机 port 推导接口地址。"""
     if "base_url" in cfg:
         return cfg["base_url"]
     return f"http://localhost:{cfg['port']}/v1"

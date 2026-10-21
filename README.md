@@ -1,119 +1,119 @@
-# model_console — vLLM 模型管理 & 聊天界面
+# Model Console
 
-一个基于 FastAPI 的 Web 应用,用于在本地启动/扫描 vLLM 模型并与之聊天。
-后端在**前台进程**中拉起 vLLM,通过 SSE 实时推送日志;前端是单文件单页应用。
+基于 FastAPI 的模型管理、聊天和评测控制台。支持连接 OpenAI 兼容接口、启动本机 vLLM、SSE 日志与聊天、并发评测、断点续跑、榜单及 Excel 导出。
 
-## H200 部署说明(2026-09-02 迁移)
+## 快速开始
 
-本项目从 `yiling:/mntnlp/csp/workspace/csp_dev` 迁移到
-`H200:/home/users/caoshipeng/workspace/model_console`,目录已更名
-`csp_dev -> model_console`。本 README 其余部分描述的 yiling 旧路径
-(`/mntnlp/...`)在 H200 上不存在,以下方替换关系为准:
-
-| yiling 旧位置 | H200 新位置 |
-| --- | --- |
-| `/mntnlp/csp/workspace/csp_dev/` | `~/workspace/model_console/` |
-| `/mntnlp/csp/workspace/model_config.py` | `model_console/model_config.py`(仓库内唯一一份,**当前为空占位**,需为 H200 填写模型条目;迁移时已去掉符号链接结构) |
-| `/mntnlp/csp/workspace/.venv` | 尚未创建,见下方快速开始 |
-| `serve.py` / `eval_models.py` 等上层脚本 | 暂未迁移,仍在 yiling |
-
-医疗评测数据位置: MedicalAgentsBench 已收进仓库内
-,另有
-;两者均在  中(可从 yiling
- 重导)。
-
-H200 上**只有一份 `model_config.py`,就在仓库目录里**,直接编辑即可
-(yiling 时代的父目录 + 符号链接结构已在迁移时拆除)。`app.py` 每次
-请求热重载配置,改完即生效,不用重启服务。
-
-### 快速开始(在 H200 上)
+需要 Python 3.12+ 和 uv。进入项目根目录后执行:
 
 ```bash
-cd ~/workspace/model_console
-python3 -m venv .venv && source .venv/bin/activate
-pip install fastapi uvicorn httpx          # 界面/聊天所需最小依赖
-# 需要用界面启动 vLLM 时再装: pip install vllm
-python app.py                               # 监听 0.0.0.0:27000
+uv sync --frozen
+uv run --frozen python app.py
 ```
 
-浏览器访问 `http://<H200地址>:27000/`(公网被安全组挡住时可走 SSH 隧道:
-`ssh -N -L 27000:127.0.0.1:27000 H200`)。
-
-远端仓库仍为 `git@github.com:caobiabia/model-manager.git`,迁移时通过
-`git clone` 保留了完整提交历史。
-
-## 组成
-
-| 文件 | 说明 |
-| --- | --- |
-| `app.py` | FastAPI 后端:启动 vLLM、端口扫描自动探测已在运行的模型、聊天转发、SSE 日志流、按需热重载配置 |
-| `templates/index.html` | 单文件前端:内联 CSS/JS,使用 Lucide 图标、KaTeX 数学渲染、Inter 字体 |
-| `model_config.py` | 模型配置唯一数据源,仓库内实体文件(H200 版已去符号链接) |
-
-## model_config.py
-
-`model_config.py` 是「启动、评测、benchmark 的唯一数据源」。
-在 yiling 原部署中它放在上层 workspace 目录,由 `serve.py` 等兄弟脚本共享,仓库通过
-`../model_config.py` 符号链接纳入管理;迁移到 H200 后这些脚本未随行,已简化为
-**仓库内单份实体文件**。
-
-`app.py` 启动时把所在目录加入 `sys.path` 后 `import model_config`,配置即随仓库
-自洽;直接 `python -c "import model_config"` 也可用。
-
-后端还提供 `_cfg()` —— 每次请求时 `importlib.reload(model_config)`,使配置编辑**无需重启服务**即可生效。
-
-## 前端配置模型（无需手改 model_config.py）
-
-平台使用者可以直接在 Web 界面「新增模型」或点击模型行上的齿轮图标「编辑/删除」模型，
-无需手动编辑 `model_config.py`。前端配置会写入 **`models_user.json`**（与本仓库同目录），
-`model_config.py` 加载时按 key 合并进 `MODELS`：
-
-- **新增**：填入内置没有的 key，即追加一个模型；
-- **覆盖**：key 与内置模型相同，用户的版本优先（例如只改 `display_name` 或 `gpu`）；
-- **删除**：仅删除用户层配置；若对应 key 是内置模型，会回退为内置配置。
-
-合并后的 `MODELS` 就是启动 / 评测 / benchmark 的唯一数据源，
-下游脚本（`eval/common.py`、`eval/runner.py`、`eval/leaderboard.py` 等）通过
-`from model_config import MODELS` 直接可见，无需改动。
-
-后端 API：
-- `GET  /api/model-config/{key}` —— 读取单模型完整配置（编辑表单回填用）；
-- `POST /api/model-config` —— 新增或覆盖，body 为 `{key, config}`；
-- `DELETE /api/model-config/{key}` —— 删除用户层配置。
-
-> `models_user.json` 可能包含 API Key，已加入 `.gitignore`，不会进入版本管理。
-
-## 运行环境
-
-依赖(`fastapi` / `uvicorn` / `httpx`)由上层仓库的虚拟环境提供:
-
-```
-/mntnlp/csp/workspace/.venv
-```
-
-`app.py` 启动 vLLM 时也使用该 `.venv/bin/vllm` 与 `.venv/bin/python`。
-
-## 启动
+默认监听 `0.0.0.0:27000`。H200 现有目录是
+`/home/users/caoshipeng/workspace/model_console`。通过本地 SSH 隧道访问:
 
 ```bash
-cd /mntnlp/csp/workspace/csp_dev
-python app.py
+ssh -N -L 27000:127.0.0.1:27000 H200
 ```
 
-默认监听 `0.0.0.0:27000`,`reload=True`(监控 `csp_dev/` 内的 app/模板改动)。
-浏览器访问 `http://<host>:27000/`。
+浏览器打开 `http://127.0.0.1:27000/`。控制台提供启动、停止模型和修改配置的管理能力,
+当前没有登录鉴权,部署时应放在受信任网络、SSH 隧道或带鉴权的反向代理后。
 
-## 配置(环境变量)
+仅连接已有模型接口时不需要 GPU 或 vLLM。需要从控制台启动本机模型时,
+在与 CUDA、模型兼容的环境中单独安装 vLLM; 它没有包含在控制台的 uv 锁定依赖中。
+程序依次查找当前 Python 环境、项目 `.venv`、父目录共享 `.venv` 和 `PATH` 中的 `vllm`。
+模型相对权重路径仍按父目录 workspace 解析,绝对路径按原值使用。
 
-从环境变量读取,无硬编码密钥:
+## 目录与配置
 
-- `DEEPSEEK_API_KEY` —— 当模型 `provider=deepseek`(远程 API)时需要。
-  复制 `.env.example` 为 `.env` 填入真实值,或 `export DEEPSEEK_API_KEY=...`。
+| 路径 | 用途 |
+| --- | --- |
+| `app.py` | FastAPI API、模型生命周期、聊天和 SSE |
+| `templates/index.html` | 单页前端,内联 CSS / JavaScript |
+| `static/` | KaTeX、Lucide 和字体资源 |
+| `model_config.py` | 内置模型定义、默认 vLLM 参数、配置合并 |
+| `models_user.example.json` | H200 用户模型配置的脱敏示例 |
+| `model_descriptions.json` | 模型说明 |
+| `eval/` | 数据集注册、模型调用、评测、榜单及错题工具 |
+| `tests/` | 离线回归测试 |
+| `docs/REVIEW.md` | 本次整理范围、审核重点和验证结果 |
+| `pyproject.toml` / `uv.lock` | Python 依赖声明和锁文件 |
 
-## 注意
+`model_config.py` 位于项目根目录,是实体文件。每次请求通过 `_cfg()` 热重载;
+模型配置编辑不需要重启服务。已有内置条目的权重路径和 GPU 设置属于原部署,
+迁移时需按目标机器调整。
 
-- 本仓库是 `/mntnlp/csp/workspace/csp_dev` 的**独立 git 仓库**,与上层 vLLM 上游仓库无共享历史。
-- `__pycache__/`、`.venv/`、`.env`、`*.log` 等见 `.gitignore`,不会进入版本管理。
+### 添加或覆盖模型
+
+Web 界面的新增、编辑、删除操作写入 `models_user.json`。
+同名 key 覆盖内置条目; 删除用户条目后会回退到同名内置定义。
+此文件可能包含 API Key,已被 Git 忽略。
+
+新部署可先参考 `models_user.example.json`,也可以复制后调整:
+
+```bash
+cp models_user.example.json models_user.json
+```
+
+示例保留当前 H200 注册模型的端口、接口和模型名,所有真实 API Key 已移除。
+`REPLACE_WITH_YOUR_API_KEY` 必须替换为自己的密钥,远程地址、权重路径和 SSH 隧道也需按环境配置。
+不要用模板覆盖已有部署的 `models_user.json`。
+
+| API | 用途 |
+| --- | --- |
+| `GET /api/model-config/{key}` | 读取模型配置 |
+| `POST /api/model-config` | 新增或覆盖,body 为 `{key, config}` |
+| `DELETE /api/model-config/{key}` | 删除用户层配置 |
+
+### 评测答案抽取模型
+
+MCQ 判分和 Inverse IFEval judge 需要可用的答案抽取模型。
+默认 key 为 `h100_deepseek_v41_flash_extract_temp`,其定义包含在用户配置示例中。
+可通过环境变量指定自己的模型 key:
+
+```bash
+export MODEL_CONSOLE_EXTRACT_MODEL_KEY=your_extractor_key
+uv run --frozen python app.py
+```
+
+也可以使用 `.env`:
+
+```bash
+cp .env.example .env
+uv run --frozen --env-file .env python app.py
+```
+
+直接运行 `python app.py` 不会自动加载 `.env`。该环境变量为空时,
+回退到 `http://127.0.0.1:26001/v1` 的 `Qwen/Qwen3.6-35B-A3B`。
+API 密钥写在本地 `models_user.json` 对应条目的 `api_key` 中。
+
+### 数据与运行产物
+
+- `eval/data_general/`、`eval/data_sampled10/`、`eval/test_subset.jsonl` 是原仓库已跟踪的数据,本次保留。
+- 完整医疗数据位于 H200 的 `eval/data_medical/` (约 14 MB),未纳入 Git。
+  新部署需从原部署恢复该目录; 缺少时高难子集显示数据缺失、完整集不注册,可用列表以 `/api/eval/benches` 的 `exists` 字段为准。
+- `eval/output/`、`eval/analysis/`、`eval/leaderboard.json`、日志、虚拟环境、NLTK 缓存与配置备份均不纳入 Git。
+- `eval/medbench.json` 是人工维护的榜单快照,其中 `updated` 表示快照时间,不代表实时榜单。
+
+## 开发验证
+
+```bash
+uv sync --frozen
+uv run --frozen python -m unittest discover -s tests -v
+uv run --frozen python -m compileall -q app.py model_config.py eval tests
+```
+
+回归测试覆盖评测完整性判断、连接恢复、超时不重试、停止响应和 vLLM 环境查找,
+不调用真实模型,不占用 GPU。
+
+## Git 同步
+
+GitHub 源仓库: `caobiabia/model-manager` (`master`)。
+Codeup `SafeMedLLM` 的 `master` 分支将完整项目快照存放在
+`code-csp/model-console/`,该目录与 GitHub 项目根目录对应。
+Codeup 根目录已有文件保留。两处代码通过普通 Git 提交同步,不嵌套 `.git`、不使用子模块。
 
 ## 测评 (Eval)
 
@@ -125,14 +125,14 @@ python app.py
 | 文件 | 说明 |
 | --- | --- |
 | `eval/common.py` | 共享工具：路径、数据加载、客户端创建、模型调用、答案提取（统一 DeepSeek + 正则兜底） |
-| `eval/benches.py` | Bench 注册表：11 个 bench 平铺注册，无 benchmark/subset 之分 |
+| `eval/benches.py` | Bench 注册表：按数据是否可用注册医疗与通用 bench |
 | `eval/runner.py` | 统一 EvalRunner：model x bench 笛卡尔积，并发跑题，SSE 进度推送，断点续跑 |
 
 ### Bench 列表
 
-10 个 MedicalAgentsBench 数据集（`test_hard` split）+ 1 个自定义中文子集 + 5 个通用 Bench：
+10 个 MedicalAgentsBench 数据集的高难子集与完整测试集,以及 8 个通用 Bench。原有中文子集数据保留在仓库中,当前未注册。医疗数据需先按上文恢复。
 
-`medqa` `pubmedqa` `medmcqa` `mmlu` `mmlu-pro` `medbullets` `afrimedqa` `medexqa` `medxpertqa-r` `medxpertqa-u` `medqa_cn`
+`medqa` `pubmedqa` `medmcqa` `mmlu` `mmlu-pro` `medbullets` `afrimedqa` `medexqa` `medxpertqa-r` `medxpertqa-u` (完整集 key 加 `_full`)
 
 通用 Bench（`eval/data_general/`），UI 中按能力分三组展示：「世界知识」(`mmlu_std`/`gsm8k`/`ceval`)、
 「推理能力」(`gpqa_diamond`/`aime2026`)、「指令遵循」(`ifeval`/`ifbench`/`inverse_ifeval`)：

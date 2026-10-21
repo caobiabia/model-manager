@@ -11,6 +11,7 @@ import importlib
 import os
 import re
 import signal
+import shutil
 import socket
 import subprocess
 import sys
@@ -27,19 +28,18 @@ from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-_workspace = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(_workspace))
+APP_DIR = Path(__file__).resolve().parent
+_workspace = APP_DIR.parent
+sys.path.insert(0, str(APP_DIR))
 import model_config  # noqa: E402   # type: ignore[import-untyped]
 
-APP_DIR = Path(__file__).resolve().parent
-VENV_PYTHON = str(_workspace / ".venv" / "bin" / "python")
 DESCRIPTION_FILE = APP_DIR / "model_descriptions.json"
 
 
 def _cfg():
     """Reload model_config from disk so config edits apply live without a
-    server restart. model_config.py lives in the parent workspace, outside
-    uvicorn's reload watch dir, so we refresh on demand here instead."""
+    server restart. model_config.py lives in APP_DIR and is excluded from
+    uvicorn's reload watcher, so we refresh on demand here instead."""
     importlib.reload(model_config)
     return model_config
 
@@ -470,6 +470,19 @@ _FLAG_LIKE_ARGS: frozenset[str] = frozenset({
 })
 
 
+def _vllm_executable() -> str:
+    """Find vLLM in the active, project, or legacy shared environment."""
+    candidates = (
+        Path(sys.executable).parent / "vllm",
+        APP_DIR / ".venv" / "bin" / "vllm",
+        _workspace / ".venv" / "bin" / "vllm",
+    )
+    for candidate in candidates:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return shutil.which("vllm") or str(APP_DIR / ".venv" / "bin" / "vllm")
+
+
 def _build_vllm_cmd(cfg: dict, gpu: int, gpu_memory_utilization: float,
                      max_model_len: int, max_num_seqs: int,
                      max_lora_rank: int = 64,
@@ -480,7 +493,7 @@ def _build_vllm_cmd(cfg: dict, gpu: int, gpu_memory_utilization: float,
     if model_src is None:
         raise ValueError("model config must have 'model_path' or 'base_model_path'")
     cmd = [
-        str(_workspace / ".venv" / "bin" / "vllm"), "serve",
+        _vllm_executable(), "serve",
         str(_workspace / model_src),
     ]
 
@@ -774,7 +787,7 @@ async def launch_model(model_key: str, body: LaunchRequest = LaunchRequest()):
         )
 
         env = os.environ.copy()
-        venv_bin = str(_workspace / ".venv" / "bin")
+        venv_bin = str(Path(cmd[0]).parent)
         env["PATH"] = venv_bin + ":" + env.get("PATH", "")
         env["CUDA_VISIBLE_DEVICES"] = str(gpu)
 
@@ -1241,7 +1254,7 @@ from eval.common import (  # noqa: E402
     count_jsonl_cached,
     result_stats_cached,
 )
-from eval.runner import EvalRunner, create_run_id, list_runs as _eval_list_runs  # noqa: E402
+from eval.runner import EvalRunner, create_run_id, list_runs as _eval_list_runs, summary_status  # noqa: E402
 from eval import leaderboard as _eval_lb  # noqa: E402
 
 # In-memory eval run tracking: run_id -> {"runner": EvalRunner, "status": str}
@@ -1281,6 +1294,44 @@ async def eval_list_benches() -> list[dict[str, Any]]:
     return benches
 
 
+async def _ensure_eval_models_reachable(model_keys: list[str]) -> None:
+    """Probe the actual model API; a live SSH listener alone proves nothing."""
+    cfg = _cfg()
+    for key in model_keys:
+        if key not in cfg.MODELS:
+            raise HTTPException(404, f"Unknown model: {key}")
+
+    def check(key: str) -> str | None:
+        model = cfg.MODELS[key]
+        if model.get("provider", "vllm") == "deepseek":
+            return None
+        base_url = model.get("base_url")
+        if not base_url:
+            port = model.get("port")
+            if not port:
+                return f"{key}: 未配置模型接口"
+            base_url = f"http://127.0.0.1:{port}/v1"
+        try:
+            import httpx
+            with httpx.Client(timeout=5) as client:
+                response = client.get(f"{base_url.rstrip('/')}/models")
+                response.raise_for_status()
+                names = {m["id"] for m in response.json().get("data", [])}
+            if model.get("served_model_name", key) not in names:
+                return f"{key}: 接口未提供所需模型"
+        except Exception as exc:
+            return f"{key}: {type(exc).__name__}: {exc}"
+        return None
+
+    loop = asyncio.get_running_loop()
+    results = await asyncio.gather(*(
+        loop.run_in_executor(_thread_pool, check, key) for key in model_keys
+    ))
+    failures = [result for result in results if result]
+    if failures:
+        raise HTTPException(503, "模型接口暂不可达，本次未启动。请恢复模型服务或 SSH 隧道后继续运行。\n" + "\n".join(failures))
+
+
 @app.post("/api/eval/run")
 async def eval_start_run(req: EvalRunRequest) -> dict[str, Any]:
     """Start an evaluation run in a background thread."""
@@ -1293,18 +1344,7 @@ async def eval_start_run(req: EvalRunRequest) -> dict[str, Any]:
     if req.temperature is not None and not (0.0 <= req.temperature <= 2.0):
         raise HTTPException(400, f"Invalid temperature: {req.temperature} (must be 0.0–2.0)")
 
-    cfg = _cfg()
-    for key in req.model_keys:
-        if key not in cfg.MODELS:
-            raise HTTPException(404, f"Unknown model: {key}")
-        # Refuse to eval a vLLM model that isn't running
-        model_cfg = cfg.MODELS[key]
-        if model_cfg.get("provider", "vllm") != "deepseek":
-            if not _model_is_running(key):
-                raise HTTPException(
-                    503,
-                    f"Model '{key}' is not running. Launch it first.",
-                )
+    await _ensure_eval_models_reachable(req.model_keys)
 
     run_id = create_run_id()
     runner = EvalRunner(
@@ -1338,7 +1378,7 @@ async def eval_start_run(req: EvalRunRequest) -> dict[str, Any]:
                 elif runner.error:
                     _eval_runs[run_id]["status"] = f"error: {runner.error}"
                 else:
-                    _eval_runs[run_id]["status"] = "completed"
+                    _eval_runs[run_id]["status"] = runner.completion_status
         except Exception as e:
             _eval_runs[run_id]["status"] = f"error: {e}"
 
@@ -1501,6 +1541,7 @@ async def eval_resume_run(run_id: str):
         raise HTTPException(400, "Run is already active")
 
     config = json.loads(config_file.read_text(encoding="utf-8"))
+    await _ensure_eval_models_reachable(config["model_keys"])
     runner = EvalRunner(
         run_id=run_id,
         model_keys=config["model_keys"],
@@ -1512,6 +1553,7 @@ async def eval_resume_run(run_id: str):
         max_model_len=config.get("max_model_len"),
         temperature=config.get("temperature"),
         reasoning_effort=config.get("reasoning_effort"),
+        auto_retry_incomplete=config.get("auto_retry_incomplete", False),
     )
     # Initialize progress from disk BEFORE putting in _eval_runs,
     # so the GET /progress endpoint returns correct data immediately
@@ -1535,7 +1577,7 @@ async def eval_resume_run(run_id: str):
                 elif runner.error:
                     _eval_runs[run_id]["status"] = f"error: {runner.error}"
                 else:
-                    _eval_runs[run_id]["status"] = "completed"
+                    _eval_runs[run_id]["status"] = runner.completion_status
         except Exception as e:
             _eval_runs[run_id]["status"] = f"error: {e}"
 
@@ -1613,7 +1655,7 @@ async def eval_get_run(run_id: str) -> dict[str, Any]:
     if summary_file.exists():
         try:
             result["summary"] = json.loads(summary_file.read_text(encoding="utf-8"))
-            result["status"] = result["summary"].get("status", "completed")
+            result["status"] = summary_status(result["summary"], result.get("config"))
         except (json.JSONDecodeError, OSError):
             # Empty/corrupt summary (e.g. the final write failed when the
             # disk was full) -- fall back to the no-summary path instead
@@ -1633,6 +1675,10 @@ async def eval_get_run(run_id: str) -> dict[str, Any]:
             json_files = list(output_dir.glob("*.json"))
             result["status"] = "interrupted" if json_files else "pending"
             result["partial_files"] = [f.name for f in json_files]
+
+    entry = _eval_runs.get(run_id)
+    if entry is not None:
+        result["status"] = entry["status"]
 
     detail_files = []
     for f in sorted(output_dir.glob("*__*.json")):

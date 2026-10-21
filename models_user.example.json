@@ -1,0 +1,239 @@
+{
+  "himarket_deepseek_v41_flash": {
+    "display_name": "DeepSeek-V4.1-Flash (HiMarket API)",
+    "served_model_name": "deepseek-v4.1-flash",
+    "provider": "deepseek",
+    "base_url": "https://airouter-apps.aimachine.space/v1",
+    "api_key": "REPLACE_WITH_YOUR_API_KEY"
+  },
+  "qwen38_flash_next": {
+    "display_name": "Qwen3.8-Flash-Next",
+    "served_model_name": "Qwen3.8-Flash-Next",
+    "provider": "vllm",
+    "port": 26011,
+    "base_url": "http://114.55.210.21:26011/v1",
+    "vllm_args": {
+      "max-model-len": 1048576
+    },
+    "thinking": {
+      "transport": "chat_template_kwargs",
+      "efforts": {
+        "low": "low",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max"
+      },
+      "default": "high"
+    }
+  },
+  "deepseek_v4_flash_0731_med_v81_ckpt_3315": {
+    "display_name": "DeepSeek-V4-Flash-0731 (med-v8.1 epoch1 ckpt-3315)",
+    "served_model_name": "DeepSeek-V4-Flash-0731-med-v8.1-ckpt-3315",
+    "provider": "vllm",
+    "base_url": "http://127.0.0.1:26101/v1",
+    "port": 26101,
+    "gpu": "mysslvpn:0,1,2,3",
+    "base_model_path": "/llm2/deepseek/DeepSeek-V4-Flash-0731",
+    "lora_path": "/llm/ms-swift-shared/serve-v4/adapters/checkpoint-3315",
+    "max_lora_rank": 16,
+    "vllm_args": {
+      "max-model-len": 262144,
+      "max-num-seqs": 128
+    },
+    "thinking": {
+      "transport": "chat_template_kwargs",
+      "efforts": {
+        "low": "low",
+        "high": "high",
+        "max": "max"
+      },
+      "default": "high"
+    },
+    "deployment_host": "mysslvpn",
+    "checkpoint_path": "/llm/ms-swift-shared/workspace/outputs/DeepSeek-V4-Flash-0731-full-sft-medagentbench-medbench-instruct-v8.1/v4-20261010-132227/checkpoint-3315"
+  },
+  "deepseek_v4_flash_0731_med_v81_ckpt_6630": {
+    "display_name": "DeepSeek-V4-Flash-0731 (med-v8.1 epoch2 ckpt-6630)",
+    "served_model_name": "DeepSeek-V4-Flash-0731-med-v8.1-ckpt-6630",
+    "provider": "vllm",
+    "base_url": "http://127.0.0.1:26102/v1",
+    "port": 26102,
+    "gpu": "mysslvpn:4,5,6,7",
+    "base_model_path": "/llm2/deepseek/DeepSeek-V4-Flash-0731",
+    "lora_path": "/llm/ms-swift-shared/serve-v4/adapters/checkpoint-6630",
+    "max_lora_rank": 16,
+    "vllm_args": {
+      "max-model-len": 262144,
+      "max-num-seqs": 128
+    },
+    "thinking": {
+      "transport": "chat_template_kwargs",
+      "efforts": {
+        "low": "low",
+        "high": "high",
+        "max": "max"
+      },
+      "default": "high"
+    },
+    "deployment_host": "mysslvpn",
+    "checkpoint_path": "/llm/ms-swift-shared/workspace/outputs/DeepSeek-V4-Flash-0731-full-sft-medagentbench-medbench-instruct-v8.1/v4-20261010-132227/checkpoint-6630"
+  },
+  "deepseek_v4_flash_0731_med_v81_ckpt_9945": {
+    "display_name": "DeepSeek-V4-Flash-0731 (med-v8.1 epoch3 ckpt-9945)",
+    "served_model_name": "DeepSeek-V4-Flash-0731-med-v8.1-ckpt-9945",
+    "provider": "vllm",
+    "base_url": "http://127.0.0.1:26103/v1",
+    "port": 26103,
+    "gpu": "mysslvpn2:0,1,2,3",
+    "base_model_path": "/llm2/deepseek/DeepSeek-V4-Flash-0731",
+    "lora_path": "/llm/ms-swift-shared/serve-v4/adapters/checkpoint-9945",
+    "max_lora_rank": 16,
+    "vllm_args": {
+      "max-model-len": 262144,
+      "max-num-seqs": 128
+    },
+    "thinking": {
+      "transport": "chat_template_kwargs",
+      "efforts": {
+        "low": "low",
+        "high": "high",
+        "max": "max"
+      },
+      "default": "high"
+    },
+    "deployment_host": "mysslvpn2",
+    "checkpoint_path": "/llm/ms-swift-shared/workspace/outputs/DeepSeek-V4-Flash-0731-full-sft-medagentbench-medbench-instruct-v8.1/v4-20261010-132227/checkpoint-9945"
+  },
+  "deepseek_v4_flash_0731_med_v81_ckpt_13260": {
+    "display_name": "DeepSeek-V4-Flash-0731 (med-v8.1 epoch4 ckpt-13260)",
+    "served_model_name": "DeepSeek-V4-Flash-0731-med-v8.1-ckpt-13260",
+    "provider": "vllm",
+    "base_url": "http://127.0.0.1:26104/v1",
+    "port": 26104,
+    "gpu": "mysslvpn2:4,5,6,7",
+    "base_model_path": "/llm2/deepseek/DeepSeek-V4-Flash-0731",
+    "lora_path": "/llm/ms-swift-shared/serve-v4/adapters/checkpoint-13260",
+    "max_lora_rank": 16,
+    "vllm_args": {
+      "max-model-len": 262144,
+      "max-num-seqs": 128
+    },
+    "thinking": {
+      "transport": "chat_template_kwargs",
+      "efforts": {
+        "low": "low",
+        "high": "high",
+        "max": "max"
+      },
+      "default": "high"
+    },
+    "deployment_host": "mysslvpn2",
+    "checkpoint_path": "/llm/ms-swift-shared/workspace/outputs/DeepSeek-V4-Flash-0731-full-sft-medagentbench-medbench-instruct-v8.1/v4-20261010-132227/checkpoint-13260"
+  },
+  "h100_deepseek_v41_flash_extract_temp": {
+    "display_name": "DeepSeek-V4.1-Flash-1017",
+    "served_model_name": "DeepSeek-V4.1-Flash",
+    "provider": "vllm",
+    "base_url": "http://114.55.210.21:26012/v1",
+    "vllm_args": {
+      "max-model-len": 1048576
+    },
+    "deployment_host": "h100",
+    "temporary_answer_extractor": true,
+    "thinking": {
+      "transport": "chat_template_kwargs",
+      "efforts": {
+        "low": 25,
+        "high": 50,
+        "xhigh": 75,
+        "max": 100
+      },
+      "numeric": {
+        "min": 1,
+        "max": 100
+      },
+      "default": 50
+    }
+  },
+  "deepseek_v4_flash_0731_mab2_ep1_ckpt_606": {
+    "display_name": "DeepSeek-V4-Flash-0731 (MAB2 epoch1 ckpt-606)",
+    "served_model_name": "DeepSeek-V4-Flash-0731-MAB2-epoch1-ckpt-606",
+    "provider": "vllm",
+    "base_url": "http://127.0.0.1:26111/v1",
+    "port": 26111,
+    "gpu": "mysslvpn2:4,5,6,7",
+    "base_model_path": "/llm2/deepseek/DeepSeek-V4-Flash-0731",
+    "lora_path": "/llm/ms-swift-shared/serve-v4-mab2-20261017/adapters/checkpoint-606",
+    "max_lora_rank": 16,
+    "vllm_args": {
+      "max-model-len": 262144,
+      "max-num-seqs": 128,
+      "max-loras": 4
+    },
+    "thinking": {
+      "transport": "chat_template_kwargs",
+      "efforts": {
+        "low": "low",
+        "high": "high",
+        "max": "max"
+      },
+      "default": "high"
+    },
+    "deployment_host": "mysslvpn2",
+    "checkpoint_path": "/llm/ms-swift-shared/workspace/outputs/DeepSeek-V4-Flash-0731-lora-mab2-3ep-val10-20261016/checkpoint-606"
+  },
+  "deepseek_v4_flash_0731_mab2_ep2_ckpt_1212": {
+    "display_name": "DeepSeek-V4-Flash-0731 (MAB2 epoch2 ckpt-1212)",
+    "served_model_name": "DeepSeek-V4-Flash-0731-MAB2-epoch2-ckpt-1212",
+    "provider": "vllm",
+    "base_url": "http://127.0.0.1:26111/v1",
+    "port": 26111,
+    "gpu": "mysslvpn2:4,5,6,7",
+    "base_model_path": "/llm2/deepseek/DeepSeek-V4-Flash-0731",
+    "lora_path": "/llm/ms-swift-shared/serve-v4-mab2-20261017/adapters/checkpoint-1212",
+    "max_lora_rank": 16,
+    "vllm_args": {
+      "max-model-len": 262144,
+      "max-num-seqs": 128,
+      "max-loras": 4
+    },
+    "thinking": {
+      "transport": "chat_template_kwargs",
+      "efforts": {
+        "low": "low",
+        "high": "high",
+        "max": "max"
+      },
+      "default": "high"
+    },
+    "deployment_host": "mysslvpn2",
+    "checkpoint_path": "/llm/ms-swift-shared/workspace/outputs/DeepSeek-V4-Flash-0731-lora-mab2-3ep-val10-20261016/checkpoint-1212"
+  },
+  "deepseek_v4_flash_0731_mab2_ep3_ckpt_1818": {
+    "display_name": "DeepSeek-V4-Flash-0731 (MAB2 epoch3 ckpt-1818)",
+    "served_model_name": "DeepSeek-V4-Flash-0731-MAB2-epoch3-ckpt-1818",
+    "provider": "vllm",
+    "base_url": "http://127.0.0.1:26111/v1",
+    "port": 26111,
+    "gpu": "mysslvpn2:4,5,6,7",
+    "base_model_path": "/llm2/deepseek/DeepSeek-V4-Flash-0731",
+    "lora_path": "/llm/ms-swift-shared/serve-v4-mab2-20261017/adapters/checkpoint-1818",
+    "max_lora_rank": 16,
+    "vllm_args": {
+      "max-model-len": 262144,
+      "max-num-seqs": 128,
+      "max-loras": 4
+    },
+    "thinking": {
+      "transport": "chat_template_kwargs",
+      "efforts": {
+        "low": "low",
+        "high": "high",
+        "max": "max"
+      },
+      "default": "high"
+    },
+    "deployment_host": "mysslvpn2",
+    "checkpoint_path": "/llm/ms-swift-shared/workspace/outputs/DeepSeek-V4-Flash-0731-lora-mab2-3ep-val10-20261016/checkpoint-1818"
+  }
+}

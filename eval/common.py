@@ -597,7 +597,9 @@ def _stream_completion(
         except httpx_backend.TransportError as e:
             if abort_requested(scope):
                 raise RequestAborted(f"aborted mid-stream: {e}") from e
-            raise ConnectionFailure(str(e)) from e
+            failure = ConnectionFailure(str(e))
+            failure.had_stream_progress = bool(content or reasoning)
+            raise failure from e
         except Exception as e:
             # Closing the stream from the aborting thread surfaces here as a
             # transport error; report it as the abort it actually is.
@@ -625,6 +627,7 @@ def call_model(
     reasoning_effort=None,
     thinking_spec: dict | None = None,
     scope: str | None = None,
+    connection_recovery_timeout: float = 0.0,
 ) -> tuple[str, str, object | None]:
     """Call a chat model with mode-appropriate thinking settings.
 
@@ -636,7 +639,10 @@ def call_model(
       * timeouts are never retried: a generation that outruns the serving
         capacity would be regenerated from scratch, wasting the very GPU
         time that made it slow;
-      * only connection failures are retried, at most ``max_retries`` times;
+      * connection failures use ``max_retries`` unless a positive
+        ``connection_recovery_timeout`` allows waiting for a tunnel to recover;
+        that window starts at the first connection failure, not at the start
+        of a potentially long, healthy generation;
       * ``scope`` ties the request to a bench so that a bench-scoped abort
         can close it (``None`` = reachable only by the whole-run abort).
 
@@ -695,10 +701,15 @@ def call_model(
     if _stream_interval_ok.get(str(client.base_url), True):
         kwargs.setdefault("extra_body", {})["stream_interval"] = _STREAM_INTERVAL
 
-    attempts = max_retries + 1
-    for attempt in range(attempts):
+    attempt = 0
+    recovery_deadline = None
+    while True:
         try:
-            return _stream_completion(client, kwargs, scope)
+            result = _stream_completion(client, kwargs, scope)
+            if recovery_deadline is not None:
+                print(f"Eval connection recovered: model={model_name} scope={scope} "
+                      f"retries={attempt}", file=sys.stderr, flush=True)
+            return result
         except APIStatusError as e:
             if (e.status_code == 400 and "stream_options" in kwargs
                     and "stream_options" in str(e)):
@@ -717,10 +728,31 @@ def call_model(
         except (RequestAborted, GenerationTimeout):
             raise
         except (APIConnectionError, ConnectionFailure) as e:  # transport
-            if attempt + 1 >= attempts:
+            if abort_requested(scope):
+                raise RequestAborted("aborted during connection recovery") from e
+            if connection_recovery_timeout > 0:
+                # Healthy generation time is not part of an outage budget.
+                if getattr(e, "had_stream_progress", False):
+                    recovery_deadline = None
+                if recovery_deadline is None:
+                    recovery_deadline = time.monotonic() + connection_recovery_timeout
+                    print(f"Eval connection interrupted: model={model_name} scope={scope}; "
+                          f"retrying for up to {connection_recovery_timeout:g}s: {e}",
+                          file=sys.stderr, flush=True)
+                remaining = recovery_deadline - time.monotonic()
+                if remaining <= 0:
+                    raise
+            elif attempt >= max_retries:
                 raise
-            time.sleep(2 ** attempt)
-    raise RuntimeError("call_model: retry loop fell through")
+            delay = min(2 ** min(attempt, 4), 15)
+            if recovery_deadline is not None:
+                delay = min(delay, remaining)
+            wait_until = time.monotonic() + delay
+            while time.monotonic() < wait_until:
+                if abort_requested(scope):
+                    raise RequestAborted("aborted during connection recovery") from e
+                time.sleep(min(0.2, max(0.0, wait_until - time.monotonic())))
+            attempt += 1
 
 
 # -- answer extraction -----------------------------------------------------

@@ -14,9 +14,18 @@ env/
 
 # Secrets / env
 .env
+.env.*
+!.env.example
 
 # User-editable model config (added via Web UI, may contain API keys)
 models_user.json
+models_user.json.*
+models_user*.bak
+model_descriptions.json.pre-*
+config_backups/
+*.tmp
+*.patch
+/d2.txt
 
 # OS
 .DS_Store
@@ -42,5 +51,5 @@ eval/analysis/
 # Repo-local NLTK corpora downloaded by the IFEval/IFBench verifiers
 eval/follow/.nltk_data/
 
-# 医疗评测数据(仓库内托管,14M,可从 yiling 重导)
+# 医疗评测数据仅在部署目录保留,迁移时从原部署恢复
 eval/data_medical/

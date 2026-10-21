@@ -2527,7 +2527,7 @@ function handleEvalEvent(runId,ev){
   }else if(ev.type==='pair_done'){
     const key=ev.model_key+'|'+ev.bench_id;
     if(run.progressData[key]){
-      const inc=ev.aborted||(ev.stopped&&ev.processed<ev.total);
+      const inc=ev.status==='interrupted'||ev.aborted||(ev.stopped&&ev.processed<ev.total);
       Object.assign(run.progressData[key],{
         // An aborted/stopped pair reports what was actually scored; keeping
         // the higher live counter would show "10000/10000" for a bench that
@@ -2536,7 +2536,7 @@ function handleEvalEvent(runId,ev){
         correct:ev.correct,accuracy:ev.accuracy,
         bench_name:ev.bench_name||run.progressData[key].bench_name,
         error:ev.error||'',
-        status:ev.aborted?'aborted':(ev.stopped&&run.progressData[key].total>0&&ev.processed<run.progressData[key].total?'interrupted':'done')
+        status:ev.status||(inc?'interrupted':'done')
       });
     }
   }else if(ev.type==='skip'){
@@ -2547,6 +2547,7 @@ function handleEvalEvent(runId,ev){
     run.status='error';
   }else if(ev.type==='done'){
     run.progressData._finalResults=ev.results;
+    run.status=ev.status||'completed';
     // Runner has finished; finalize immediately even if [EOF] is lost.
     onEvalDone(runId);
   }
@@ -2565,10 +2566,17 @@ function renderEvalProgressInit(runId,modelKeys,benchIds){
   updateRunSummary(runId);
   if(activeEvalRunId===runId)renderEvalProgress(runId);
 }
-function onEvalDone(runId){
+async function onEvalDone(runId){
   const run=evalRuns[runId];
   if(!run)return;
-  if(run.status==='running')run.status='completed';
+  if(run.status==='running'){
+    try{
+      const response=await fetch('/api/eval/run/'+runId);
+      if(!response.ok)throw new Error('status unavailable');
+      const detail=await response.json();
+      run.status=detail.status||'interrupted';
+    }catch(e){run.status='interrupted'}
+  }
   if(run.status==='completed'){
     delete evalRuns[runId];
     renderRunningEvalList();
@@ -2595,6 +2603,10 @@ async function refreshEvalRunStatuses(){
       if(st==='completed'&&run.status!=='completed'){
         if(run.eventSource){run.eventSource.close();run.eventSource=null}
         run.status='completed';
+        onEvalDone(rid);
+      }else if(['interrupted','stopped','aborted'].includes(st)&&run.status!==st){
+        if(run.eventSource){run.eventSource.close();run.eventSource=null}
+        run.status=st;
         onEvalDone(rid);
       }else if(st.startsWith('error')&&run.status!=='error'){
         run.status='error';
